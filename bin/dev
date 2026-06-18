@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+
+if ! gem list foreman -i --silent; then
+  echo "Installing foreman..."
+  gem install foreman
+fi
+
+# The Vite dev server is optional: the Rails app is fully server-rendered and
+# boots without any JS build. Only add `vite` to the process list when its deps
+# are installed, so a reviewer without Node still gets a working `bin/dev`.
+if [ -d node_modules ]; then
+  exec foreman start -f Procfile.dev "$@"
+else
+  echo "node_modules not found — starting without the Vite dev server."
+  echo "Run 'npm install' to enable the Svelte/TS frontend."
+  exec foreman start -f Procfile.dev -m vite=0 "$@"
+fi
