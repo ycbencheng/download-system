@@ -1,0 +1,11 @@
+h1 Your download is ready
+
+p
+  strong Product:
+  = " #{@product.name}"
+
+p
+  strong Expires:
+  = " #{l @link.expires_at, format: :long}"
+
+= button_to "Download", download_landing_path(token: @token), method: :post
