@@ -1,6 +1,17 @@
 class DownloadsController < ApplicationController
   include DownloadLinkLookup
 
+  # Token URLs use a layout with no JavaScript.
+  layout "download"
+
+  PLACEHOLDER_FILE = "/downloads/sample.pdf"
+
+  protect_from_forgery with: :exception
+  skip_before_action :verify_authenticity_token, only: :download, if: -> { request.format.json? }
+
+  # GET show is read-only; POST download consumes one download. Prefetchers and
+  # email scanners typically issue GET only, so they cannot burn the limit.
+
   def show
     @token = params[:token]
     link = find_link_by_token(@token)
@@ -49,6 +60,66 @@ class DownloadsController < ApplicationController
             expires_at: link.expires_at.iso8601
           }
         end
+      end
+    end
+  end
+
+  def download
+    @token = params[:token]
+    link = find_link_by_token(@token)
+
+    unless link
+      return render_download_error(
+        status: :not_found,
+        code: "not_found",
+        message: "Link not found",
+        template: :not_found
+      )
+    end
+
+    # Single atomic conditional UPDATE — one round trip, safe under concurrent POSTs.
+    # revoked_at IS NULL in the WHERE clause enforces revocation alongside limit and expiry.
+    updated = DownloadLink
+      .where(id: link.id)
+      .where("download_count < max_downloads AND expires_at > ? AND revoked_at IS NULL", Time.current)
+      .update_all("download_count = download_count + 1")
+
+    if updated == 1
+      # update_all bypasses Active Record — reload before using the link again.
+      link.reload
+
+      # DownloadEvent is audit-only; download_count on the link is canonical.
+      link.download_events.create!(
+        ip: request.remote_ip,
+        user_agent: request.user_agent
+      )
+
+      redirect_to PLACEHOLDER_FILE, allow_other_host: false
+    else
+      link.reload
+
+      case link_status(link)
+      when :revoked
+        render_download_error(
+          status: :gone,
+          code: "revoked",
+          message: "This download link has been revoked",
+          template: :revoked
+        )
+      when :expired
+        render_download_error(
+          status: :gone,
+          code: "expired",
+          message: "This download link has expired",
+          template: :expired
+        )
+      else
+        render_download_error(
+          status: :forbidden,
+          code: "limit_reached",
+          message: "This link has reached its download limit",
+          template: :limit
+        )
       end
     end
   end

@@ -6,6 +6,7 @@ Rails.application.routes.draw do
   end
 
   get "d/:token", to: "downloads#show", as: :download_landing
+  post "d/:token", to: "downloads#download", as: :download_confirm
 
   get "up" => "rails/health#show", as: :rails_health_check
 end
