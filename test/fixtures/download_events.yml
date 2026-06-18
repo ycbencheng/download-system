@@ -1,0 +1,5 @@
+one:
+  download_link: active
+  ip: 127.0.0.1
+  user_agent: curl/8.0
+  created_at: <%= Time.current.to_fs(:db) %>

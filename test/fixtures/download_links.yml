@@ -1,0 +1,28 @@
+active:
+  order: alice
+  token_digest: <%= Digest::SHA256.hexdigest("fixture-active-token") %>
+  expires_at: <%= 24.hours.from_now.to_fs(:db) %>
+  max_downloads: 3
+  download_count: 0
+
+expired:
+  order: alice
+  token_digest: <%= Digest::SHA256.hexdigest("fixture-expired-token") %>
+  expires_at: <%= 1.hour.ago.to_fs(:db) %>
+  max_downloads: 3
+  download_count: 0
+
+maxed:
+  order: alice
+  token_digest: <%= Digest::SHA256.hexdigest("fixture-maxed-token") %>
+  expires_at: <%= 24.hours.from_now.to_fs(:db) %>
+  max_downloads: 3
+  download_count: 3
+
+revoked:
+  order: alice
+  token_digest: <%= Digest::SHA256.hexdigest("fixture-revoked-token") %>
+  expires_at: <%= 24.hours.from_now.to_fs(:db) %>
+  max_downloads: 3
+  download_count: 0
+  revoked_at: <%= 1.hour.ago.to_fs(:db) %>

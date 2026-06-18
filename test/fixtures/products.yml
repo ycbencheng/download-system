@@ -1,0 +1,5 @@
+ebook:
+  name: Sample Ebook
+  file_name: ebook.pdf
+  expiry_hours: 24
+  max_downloads: 3
