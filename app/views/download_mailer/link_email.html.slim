@@ -1,0 +1,15 @@
+h1 Your download is ready!
+
+p Hi! Your purchase of <strong>#{@product.name}</strong> is complete.
+
+p Click the link below to download your file:
+
+p
+  a href=@download_url Download #{@product.name}
+
+p This link will expire — use it before it does.
+
+p
+  | If the link above doesn't work, copy and paste this URL into your browser:
+  br
+  = @download_url
