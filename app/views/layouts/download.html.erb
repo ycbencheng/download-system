@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<%# Token URLs: no scripts or third-party assets — CSS and CSRF meta only. %>
+<html>
+  <head>
+    <title><%= content_for(:title) || "Download System" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <link rel="icon" href="/icon.png" type="image/png">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+
+    <%= stylesheet_link_tag :app %>
+  </head>
+
+  <body>
+    <%= yield %>
+  </body>
+</html>

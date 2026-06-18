@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<%# Dashboard layout — loads the Svelte/Vite bundle. %>
+<html>
+  <head>
+    <title><%= content_for(:title) || "Download System" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <%= yield :head %>
+
+    <link rel="icon" href="/icon.png" type="image/png">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+
+    <%= stylesheet_link_tag :app %>
+    <%= vite_dashboard_tags %>
+  </head>
+
+  <body>
+    <%= yield %>
+  </body>
+</html>

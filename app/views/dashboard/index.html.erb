@@ -1,1 +1,14 @@
-<div id="dashboard"></div>
+<%# Shown until the Svelte bundle mounts; cleared by the entrypoint on success. %>
+<div id="dashboard">
+  <div class="frontend-fallback">
+    <h1>Dashboard frontend not built</h1>
+    <p>
+      The read-only dashboard is a Svelte app and needs its bundle. Run
+      <code>npm install</code> then <code>npm run build</code>, or start the dev
+      server with <code>bin/dev</code>, and reload this page.
+    </p>
+    <noscript>
+      <p>(JavaScript is also required and appears to be disabled.)</p>
+    </noscript>
+  </div>
+</div>
