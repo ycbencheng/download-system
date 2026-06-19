@@ -16,6 +16,7 @@ module Api
 
       private
 
+      # Accept nested { product: { … } } or flat keys — same pattern as order_params.
       def product_params
         source = params[:product].present? ? params.require(:product) : params
         source.permit(:name, :file_name, :expiry_hours, :max_downloads)

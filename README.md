@@ -70,6 +70,8 @@ The app runs at [http://localhost:3000](http://localhost:3000). Health check: [h
 | Maxed    | `http://localhost:3000/d/dev-maxed-link-token`           | 403, "Download limit reached"    |
 | Revoked  | `http://localhost:3000/d/dev-revoked-link-token`         | 410, "Download link revoked"     |
 
+Expected responses above are the HTML page headings (`h1`). JSON clients get the longer messages in [Error → HTTP status](#error--http-status) below.
+
 Clicking the `Download` button on the normal link redirects to the real placeholder at `public/downloads/sample.pdf`. The DB only stores `SHA256(token)`; the raw tokens above live solely in `db/seeds.rb` and the URLs.
 
 ## Sample request
@@ -159,7 +161,8 @@ sequenceDiagram
 
 `GET /d/:token` renders a read-only landing page that changes no state, so email
 security scanners and link prefetchers (which only issue GET) can't consume a
-download. Only the buyer's explicit `POST /d/:token` counts.
+download. Only the buyer's explicit `POST /d/:token` counts. The HTML form
+includes a CSRF token; JSON POSTs skip verification for programmatic clients.
 
 ```mermaid
 flowchart TD
@@ -194,7 +197,7 @@ The raw 256-bit token lives only in the emailed URL; the database stores only
 | Product missing (order create)  | 404    | —                                            |
 | Validation (e.g. bad email)     | 422    | —                                            |
 
-Browsers get friendly HTML pages; API clients get JSON via `respond_to`.
+Browsers get friendly HTML pages (short `h1` headings on error templates); API clients get JSON via `respond_to` with the messages in the table above.
 
 ## Revoking a link
 
@@ -210,6 +213,43 @@ bin/rails 'download_links:revoke[dev-active-link-token]'
 
 Re-running revoke on an already-revoked link prints an "already revoked" message without changing `revoked_at`.
 
+## Assumptions, tradeoffs, and manual verification
+
+### Assumptions
+
+- **Bearer URL = access.** Anyone with `/d/:token` can download until expiry, cap, or revoke. There is no per-buyer auth.
+- **Product settings are snapshotted** onto each `DownloadLink` at order time (`expires_at`, `max_downloads`). Changing a product later does not retroactively alter issued links.
+- **Placeholder file delivery.** Successful downloads redirect to a static `public/downloads/sample.pdf`, not per-product bytes. Production would use presigned object-storage URLs.
+- **Configured host for issued URLs.** `download_url` is built from `action_mailer.default_url_options`, not the request `Host` header.
+- **Seeds are idempotent for rows, not for usage.** Re-running `db:seed` does not reset `download_count` on an already-maxed demo link; use `bin/rails db:prepare` or reset the link before re-walking the happy path.
+
+### Tradeoffs (intentional)
+
+| Area | Choice | Cost |
+|------|--------|------|
+| Download enforcement | Single conditional `UPDATE` (no row lock) | Correct under concurrency; `update_all` bypasses AR callbacks |
+| Prefetch safety | GET landing is read-only; POST confirms | Extra click for buyers; stops scanners burning the cap |
+| Audit trail | `DownloadEvent` after increment; errors logged, not rolled back | Count can exceed event rows if audit insert fails |
+| Email | `deliver_later` after commit | Order can exist without delivered mail if the queue dies |
+| API surface | Open `POST /api/v1/orders`, no idempotency | Retries create duplicate orders/links |
+| Revocation | `revoked_at` timestamp only | In-flight POST may win if UPDATE runs before revoke is visible (TOCTOU) |
+| Token pages | `download` layout, no JavaScript | Dashboard needs a separate Vite build step |
+| Dashboard feeds | Orders/events capped at 50/100 rows | All products listed; pagination deferred |
+
+### What was manually checked
+
+Before submission, these were run against a local `bin/dev` server with Postgres up:
+
+- `bin/rails test` — 98 runs, 0 failures (includes concurrency cap, host-header, and event-drift tests)
+- `GET /up` → 200
+- Seed error matrix: `/d/dev-expired-link-token` → 410, `/d/dev-maxed-link-token` → 403, `/d/dev-revoked-link-token` → 410, `/d/bogus` → 404
+- `POST /api/v1/orders` → 201 with `download_url`; missing product → 404; invalid email → 422
+- `GET /d/dev-active-link-token` after resetting `download_count` → 200, no `<script>` tags; `POST` → 302 to `/downloads/sample.pdf`
+- `public/downloads/sample.pdf` present on disk
+- `download_links:revoke` idempotent message on already-revoked seed link
+
+Full step-by-step checklist is maintained in the manual QA plan used for submission review.
+
 ## Known Limitations
 
 - **Bearer-token model** — Anyone with the URL can download. The two-step landing page stops email scanners from burning the limit, but it does not prevent link sharing.
@@ -223,6 +263,7 @@ Re-running revoke on an already-revoked link prints an "already revoked" message
 - **Count vs. event drift** — `download_count` on the link is canonical. If a `DownloadEvent` insert fails after the atomic increment, the buyer still receives the file (logged error, redirect proceeds).
 - **Token in logs** — Request logs include the raw token in `/d/:token` paths. Production would scrub tokens in the log formatter.
 - **Token collision** — Retries up to 3 times on `RecordNotUnique` when generating token digests.
+- **Dashboard pagination** — API feeds return the 50 most recent orders and 100 most recent download events; all products are listed uncapped.
 
 ## Production Considerations
 

@@ -7,6 +7,7 @@ class DownloadsController < ApplicationController
   PLACEHOLDER_FILE = "/downloads/sample.pdf"
 
   protect_from_forgery with: :exception
+  # HTML form POSTs from button_to include the CSRF token; JSON POSTs skip verification.
   skip_before_action :verify_authenticity_token, only: :download, if: -> { request.format.json? }
 
   # GET show is read-only; POST download consumes one download. Prefetchers and

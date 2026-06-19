@@ -1,6 +1,7 @@
 module Api
   module V1
     class BaseController < ActionController::API
+      # Stable envelope — do not leak ActiveRecord "Couldn't find …" messages to API clients.
       rescue_from ActiveRecord::RecordNotFound do
         render json: { error: { code: "not_found", message: "Resource not found" } }, status: :not_found
       end

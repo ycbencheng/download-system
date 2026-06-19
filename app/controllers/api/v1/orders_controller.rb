@@ -22,6 +22,7 @@ module Api
               max_downloads: product.max_downloads
             )
           end
+        # Digest collision is astronomically rare; retry with a fresh token (max 3) instead of failing the order.
         rescue ActiveRecord::RecordNotUnique
           retries += 1
           order = product.orders.new(buyer_email: order_params.require(:buyer_email))
@@ -44,6 +45,7 @@ module Api
 
       private
 
+      # Accept nested { order: { … } } (README curl) or flat { product_id, buyer_email }.
       def order_params
         source = params[:order].present? ? params.require(:order) : params
         source.permit(:product_id, :buyer_email)

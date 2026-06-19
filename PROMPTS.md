@@ -1,138 +1,263 @@
-# AI Prompts & Design Notes
+# PROMPTS.md
 
-Documentation for the expiring download links take-home: iterative AI collaboration, kept/rejected decisions, and architectural rationale.
+## Purpose
 
-## Initial prompt
+This file documents how I used AI during this take-home.
+
+I used AI to speed up scaffolding, explore concurrency approaches, and draft tests — but I reviewed every meaningful part of the output, changed incorrect or over-abstract parts, and verified behavior myself. I own the final submission. If this shipped, I would own the bugs too.
+
+## What I asked AI to help with
+
+- Scaffolding the Rails app (models, migrations, API controllers, download flow)
+- Choosing an approach for concurrent download-limit enforcement
+- Designing the two-step GET/POST download flow
+- Drafting integration and concurrency tests
+- Suggesting a read-only Svelte dashboard structure
+- A pre-submission review pass to catch doc/CI/requirement gaps
+
+## Working style
+
+I did not copy AI output blindly.
+
+I used AI for first drafts and trade-off comparisons, then manually reviewed hot-path code (download increment, token handling, URL generation), removed unnecessary abstraction, and added tests around the highest-risk behavior. When AI proposed something I did not trust — `request.base_url`, `increment!` under concurrency, user-agent blocklists — I either rewrote it or rejected it with a simpler alternative.
+
+Inline comments in the code mark the main judgment calls; this file is the running commentary.
+
+---
+
+## Prompt log
+
+### Prompt 1 — Initial build
 
 > Build a Rails app that implements digital product downloads:
+>
 > - Merchants define products (name, file, expiry hours, max downloads).
 > - A JSON API accepts orders (product + buyer email) and issues a unique expiring download link.
 > - Email the buyer a link; enforce expiry and download limits.
 > - A simple dashboard shows products, orders, and download activity.
 > - Use PostgreSQL, background jobs for email, and document design trade-offs in PROMPTS.md.
 
-**What AI proposed:** Standard Rails CRUD, single-step `GET /d/:token` that streams the file immediately, `increment!` on `download_count`, raw token stored in the database, `request.base_url` for download URLs.
+**Why I used this prompt**
 
-**What I kept:** Rails 8 + PostgreSQL + Solid Queue, JSON order API, email via `deliver_later`, Slim download pages, Svelte dashboard.
+I wanted a first pass on the full flow — data model, order API, download route, and email — so I could focus review time on correctness and concurrency rather than boilerplate.
 
-**What I rejected:** Single-step download (email scanners burn limits), raw token storage (digest-only), `request.base_url` (Host-header poisoning), `increment!` without a conditional guard (race under concurrent POSTs).
+**What I kept**
 
----
+- Rails 8 + PostgreSQL + Solid Queue for email delivery
+- JSON order API returning a download URL
+- `deliver_later` after the order transaction commits
+- Slim templates for buyer-facing download pages
+- Svelte/TypeScript dashboard (read-only feeds)
 
-## Iteration 1 — Concurrency & limit enforcement
+**What I changed**
 
-**Prompt:** "How should I enforce max downloads under concurrent POSTs to the same token?"
+- Replaced single-step download with GET landing + POST consume
+- Stored `SHA256(token)` in the database instead of the raw token
+- Replaced `increment!` with a single conditional `UPDATE` for limit enforcement
+- Built download URLs from `action_mailer.default_url_options`, not `request.base_url`
+- Copied `expires_at` and `max_downloads` onto each link at creation (snapshot settings)
 
-| AI suggestion | Decision | Rationale |
-|---------------|----------|-----------|
-| Row-level lock + `increment!` | Rejected | Extra round trips; lock contention under burst traffic |
-| Optimistic locking (`lock_version`) | Rejected | Retries add complexity; still two round trips on conflict |
-| Single conditional `UPDATE … WHERE download_count < max_downloads` | **Kept** | One atomic statement; see `DownloadsController#download` |
+**Why I changed it**
 
-**Inline override:** `app/controllers/downloads_controller.rb` — `update_all` instead of `increment!` so the limit check and increment happen in one SQL statement.
-
----
-
-## Iteration 2 — Two-step download flow
-
-**Prompt:** "Email link scanners are hitting my download URL and exhausting the limit before the buyer clicks."
-
-| AI suggestion | Decision | Rationale |
-|---------------|----------|-----------|
-| User-agent blocklist for scanners | Rejected | Fragile, easy to spoof |
-| Signed one-time tokens per click | Rejected | Over-engineered for the brief |
-| GET landing page (read-only) + POST to consume | **Kept** | Scanners typically issue GET only; buyer clicks POST |
-
-**Inline override:** `config/routes.rb` — separate `GET /d/:token` (show) and `POST /d/:token` (download).
+The first draft was structurally fine but weak on production edge cases: email scanners burning limits, Host-header poisoning in URLs, race conditions on concurrent POSTs, and unnecessary exposure of raw tokens in the database.
 
 ---
 
-## Iteration 3 — Host-safe URL generation
+### Prompt 2 — Concurrent download limits
 
-**Prompt:** "Should download URLs in the order API response use `request.base_url`?"
+> How should I enforce max downloads under concurrent POSTs to the same token?
 
-| AI suggestion | Decision | Rationale |
-|---------------|----------|-----------|
-| `request.base_url` | Rejected | Attacker can spoof `Host` header and poison emailed links |
-| `action_mailer.default_url_options` | **Kept** | Configured host; immune to request header manipulation |
+**Why I used this prompt**
 
-**Inline override:** `app/controllers/api/v1/orders_controller.rb` — `download_url_for` uses `default_url_options`, not `request.base_url`.
+The hot path is a counted, time-limited resource. I needed one approach that stays correct when multiple buyers (or retries) POST at the same time.
 
----
+**What I kept**
 
-## Iteration 4 — Submission review pass (2026-06-18)
+- Single SQL statement that increments only when `download_count < max_downloads`, `expires_at > now`, and `revoked_at IS NULL`
+- `revoked_at IS NULL` inside the `WHERE` clause so revocation is enforced atomically with the limit
 
-**Prompt:** "Review this repo against the take-home brief and fix trust-breaking gaps before submission."
+**What I changed**
 
-| Finding | Fix |
-|---------|-----|
-| README curl uses nested `order` params but controller read flat keys | Accept both shapes in `order_params` |
-| CI runs `test:system` but no system tests exist | Add `test/system/order_download_flow_test.rb` |
-| README claims `download_count <= max_downloads` CHECK but migration missing | Add DB check constraint + model test |
-| Dockerfile Ruby 3.3.7 vs `.ruby-version` 3.4.9 | Align versions; add `npm ci && npm run build` |
-| Duplicated `link_status` in concern + dashboard | Extract `DownloadLink#status` / `#status_label` |
-| No product creation API | Add `POST /api/v1/products` |
-| `RecordNotFound` leaks AR messages | Stable `"Resource not found"` envelope |
-| Download button POSTed to GET route | Use `download_confirm_path` |
-| Token digest collision unhandled | Retry loop (max 3) on `RecordNotUnique` |
+- Rejected row-level locks + `increment!` (extra round trips, contention)
+- Rejected optimistic locking / `lock_version` (retries, still multi-step)
+- Used `update_all` + `reload` instead of Active Record's usual increment helpers
 
-**Kept from security plan:** Host-safe URLs, DownloadEvent rescue (buyer still gets file if audit insert fails), revoke-by-token rake, dashboard-only `allow_browser`, expired+maxed classification precedence, idempotent `revoke!`, CI `npm ci` + `build_js`.
+**Why I changed it**
+
+AI's default Rails patterns (`find`, `increment!`) are readable but not safe enough here without additional locking. One conditional `UPDATE` is simpler to reason about and matches what I would ship.
+
+**Inline override:** `app/controllers/downloads_controller.rb` — see comments above `update_all` (Prompt 2).
 
 ---
 
-## Design Decisions
+### Prompt 3 — Email scanner / prefetch problem
 
-### Overview
+> Email link scanners are hitting my download URL and exhausting the limit before the buyer clicks.
 
-- **Two-step download** — GET `/d/:token` is read-only (landing page). POST `/d/:token` consumes one download. Email scanners and prefetchers typically issue GET only, so they cannot burn the download limit.
-- **Atomic limit enforcement** — A single conditional `UPDATE` increments `download_count` only when `download_count < max_downloads`, `expires_at > now`, and `revoked_at IS NULL`. This holds under concurrent POSTs without row-level locks.
-- **Token storage** — Raw tokens appear only in the 201 response and the buyer email. The database stores `SHA256(token)` and looks up by digest on a unique index.
-- **Snapshot settings** — `expires_at` and `max_downloads` are copied onto each link at creation so later product edits do not affect issued links.
+**Why I used this prompt**
 
-### Data model
+This is a real failure mode for bearer-token download links, not a theoretical concern.
 
-- DB constraints enforce invariants that the hot path bypasses: `CHECK (download_count >= 0)`, `CHECK (download_count <= max_downloads)`, positive `expiry_hours`/`max_downloads`, `NOT NULL` + unique `token_digest`, FKs with `on_delete: :restrict` (mirrored by `restrict_with_exception` in models).
-- `DownloadEvent` is append-only audit data. `download_count` on the link is the source of truth.
-- `buyer_email` uses `URI::MailTo::EMAIL_REGEXP` for format validation.
+**What I kept**
 
-### Order API (`POST /api/v1/orders`)
+- Read-only GET landing page that never changes `download_count`
+- POST to consume one download when the buyer clicks "Download"
 
-- `SecureRandom.urlsafe_base64(32)` for token entropy; retries up to 3 times on digest collision.
-- Accepts nested `{ "order": { … } }` (README curl shape) or flat `{ "product_id", "buyer_email" }`.
-- Email is enqueued with `deliver_later` after the transaction block commits, so buyers never receive a link to a rolled-back order.
-- Errors use a consistent `{ "error": { "code", "message" } }` envelope.
+**What I changed**
 
-### Product API (`POST /api/v1/products`)
+- Rejected user-agent blocklists (fragile, spoofable)
+- Rejected signed one-time sub-tokens per click (over-engineered for the brief)
+- Split routes: `GET /d/:token` (show) and `POST /d/:token` (download)
 
-- Minimal create endpoint; no admin UI. Accepts nested or flat params (same pattern as orders).
+**Why I changed it**
 
-### Download flow
+Scanners and prefetchers typically issue GET only. Separating read from consume is a small code change with a large reliability win.
 
-- Status checks run in order: revoked → expired → limit reached → ready (`DownloadLink#status`).
-- GET never changes `download_count`; tests assert the count is unchanged after landing.
-- POST uses `update_all` for the increment, then `reload` because Active Record does not refresh the in-memory object after a raw update.
-- `revoked_at IS NULL` is part of the UPDATE `WHERE` clause so revocation is enforced atomically with limit and expiry.
-- JSON POSTs skip CSRF verification; HTML form POSTs from `button_to` include the token.
+**Inline override:** `config/routes.rb` — `download_landing` vs `download_confirm`.
 
-### Concurrency testing
+---
 
-- Transactional fixtures are disabled for the parallel POST test so threads can observe each other's commits.
-- Connection pool size is raised for the test class; teardown deletes seeded rows manually.
+### Prompt 4 — Host-safe download URLs
 
-### Revocation
+> Should download URLs in the order API response use `request.base_url`?
 
-- `DownloadLink#revoke!` sets `revoked_at`. Admin access is via console or `rails download_links:revoke[ID]` — no unauthenticated HTTP endpoint.
-- Integration tests revoke an active link mid-flight and assert 410 from both GET and POST.
+**Why I used this prompt**
 
-### Frontend
+The 201 response and buyer email both contain the full URL. I wanted to confirm the URL builder was safe against header manipulation.
 
-- The order API and download pages are server-rendered HTML and run without Node installed.
-- Vite + Svelte powers the read-only dashboard only. Download pages use a separate layout with no `<script>` tags so token URLs never load JavaScript.
-- `vite_dashboard_tags` rescues a missing Vite manifest so the dashboard shell still renders; a server-rendered notice inside `#dashboard` explains when the bundle is absent. The Svelte entrypoint clears that notice on mount.
-- `autoBuild` is off in dev/test; `bin/dev` skips the Vite process when `node_modules` is missing.
+**What I kept**
 
-### Deferred / documented only
+- Named route helper (`download_landing_url`) for consistent path generation
 
-- Download idempotency (token replay) — documented approach, not fully implemented.
-- Rate limiting on the open order API — documented `Rack::Attack` mitigation, not built.
-- Dashboard pagination — feeds are capped at 50/100 rows.
+**What I changed**
+
+- Rejected `request.base_url`
+- Used `Rails.application.config.action_mailer.default_url_options` as the host source
+- Added a test that spoofs the `Host` header and asserts the URL still uses the configured host
+
+**Why I changed it**
+
+An attacker can send `Host: evil.com` and poison links in the API response or email if the app trusts the request host.
+
+**Inline override:** `app/controllers/api/v1/orders_controller.rb` — `download_url_for`.
+
+---
+
+### Prompt 5 — Audit events vs buyer experience
+
+> If `DownloadEvent` insert fails after a successful download increment, should the buyer still get the file?
+
+**Why I used this prompt**
+
+AI's first instinct was transactional all-or-nothing: roll back the download if audit logging fails. That protects audit completeness but punishes the buyer for an infrastructure glitch.
+
+**What I kept**
+
+- Append-only `DownloadEvent` rows with IP and user agent
+- `download_count` on the link as the canonical limit counter
+
+**What I changed**
+
+- Wrapped event insert in `rescue`; log the error and still redirect to the file
+- Documented the drift risk in README Known Limitations
+
+**Why I changed it**
+
+The buyer paid for access; the limit is enforced on the link row, not the audit table. A missing event is ops-visible; a failed redirect is a support ticket.
+
+**Inline override:** `app/controllers/downloads_controller.rb` — comments above the `DownloadEvent` `begin/rescue` block.
+
+---
+
+### Prompt 6 — Pre-submission self-review
+
+I did a manual pass against the brief and README before submitting. I was not asking AI to invent features — I was checking whether the repo matched what we claimed.
+
+**What I found and fixed**
+
+
+| Gap                                                                         | Fix                                               |
+| --------------------------------------------------------------------------- | ------------------------------------------------- |
+| README curl uses nested `order` params; controller only read flat keys      | `order_params` accepts both shapes                |
+| CI runs `test:system` but no system tests existed                           | Added `test/system/order_download_flow_test.rb`   |
+| README cited `download_count <= max_downloads` CHECK; migration was missing | Added check constraint + model test               |
+| Dockerfile Ruby 3.3.7 vs `.ruby-version` 3.4.9                              | Aligned versions; added `npm ci && npm run build` |
+| `link_status` duplicated in concern + dashboard                             | Extracted `DownloadLink#status` / `#status_label` |
+| No product creation API (brief requirement)                                 | Added `POST /api/v1/products`                     |
+| `RecordNotFound` leaked ActiveRecord messages                               | Stable `"Resource not found"` envelope            |
+| Download button POSTed to GET route                                         | `download_confirm_path` in `show.html.slim`       |
+| Token digest collision unhandled                                            | Retry loop (max 3) on `RecordNotUnique`           |
+
+
+**Why this pass mattered**
+
+Working code with broken docs or red CI signals carelessness. These fixes were about reviewer trust, not feature creep.
+
+---
+
+## Important judgment calls I made
+
+- **Two-step download** — GET never consumes a download; POST does. Stops scanners from burning limits.
+- **Digest-only token storage** — Raw token exists only in the 201 response and buyer email; DB stores `SHA256(token)`.
+- **Atomic conditional UPDATE** — One SQL statement for limit + expiry + revocation checks under concurrency.
+- **Audit vs delivery** — Buyer gets the file even if `DownloadEvent` insert fails; `download_count` is canonical.
+- **Host-safe URLs** — Configured host, not request host, for links in API responses and email.
+- **Snapshot link settings** — `expires_at` and `max_downloads` copied at link creation; later product edits do not affect issued links.
+- **Status precedence** — Revoked → expired → limit-reached (`DownloadLink#status`); expired wins when both expiry and cap apply.
+- **No unauthenticated revoke HTTP endpoint** — Revocation via console/rake only; dashboard stays read-only.
+- **Dashboard JS isolated** — Download pages use a layout with no JavaScript; Svelte is dashboard-only.
+- **Dashboard feed caps** — Orders capped at 50 rows, download events at 100; all products returned. Pagination deferred for the brief.
+
+## Where I overrode AI
+
+- AI suggested `request.base_url` for download URLs → configured `default_url_options` instead
+- AI suggested `increment!` / row locks for limits → single conditional `update_all`
+- AI suggested blocking scanners by user-agent → two-step GET/POST flow
+- AI suggested failing the download when audit insert fails → log and continue redirect
+- AI stored or suggested storing raw tokens → digest-only with unique index lookup
+- AI duplicated status logic in controllers → moved to `DownloadLink#status`
+- AI's first refactor passes added layers I did not need → kept interfaces minimal for a take-home
+
+## Verification I did myself
+
+- `bin/rails test` — full suite including API, model, concurrency, rake, and seed tests
+- `bin/rails test:system` — order API → landing page → download redirect flow
+- Parallel POST concurrency test (`downloads_concurrency_test.rb`) — 10 threads, `max_downloads: 5`, assert exactly 5 succeed
+- Nested and flat order param shapes both return 201
+- Host-header spoof test on order API — URL us***Inline***es configured host, not attacker host
+- Token digest collision retry — simulates `RecordNotUnique` on first save, asserts retry succeeds
+- Manual smoke via README curl examples (orders + products)
+- `npm run build && npm run check` for dashboard frontend
+- Confirmed GET landing does not change `download_count`; POST does
+
+## Known limitations
+
+- **Bearer-token model** — Anyone with the URL can download; two-step flow stops scanners, not sharing.
+- **Open APIs** — No auth on order/product create; production would add throttling and admin auth.
+- **No idempotency** — Retried order requests create duplicate orders/links.
+- **Count vs event drift** — Possible if audit insert fails after increment (documented, logged).
+- **Placeholder file serving** — `public/downloads/sample.pdf` is not revocation-aware; production would use presigned URLs.
+- **Idempotency / rate limiting** — Documented approaches only; not fully implemented.
+- **Dashboard pagination** — Feeds capped at 50 orders / 100 events; see `DashboardController` limits.
+
+See README **Known Limitations** and **Production Considerations** for deploy notes.
+
+---
+
+## Architecture reference (interview discussion)
+
+Short summary of system shape. Details also live in README and inline comments.
+
+
+| Area              | Choice                                                            |
+| ----------------- | ----------------------------------------------------------------- |
+| Download flow     | GET `/d/:token` (read-only) → POST `/d/:token` (consume)          |
+| Limit enforcement | Conditional `UPDATE` on `download_links`                          |
+| Token storage     | `SHA256(token)` digest, unique index lookup                       |
+| Order API         | Nested or flat params; email after commit; digest collision retry |
+| Product API       | `POST /api/v1/products` (no admin UI)                             |
+| Dashboard         | Read-only Svelte feeds; separate layout from download pages; orders/events capped |
+| Revocation        | `revoke!` / `rails download_links:revoke[id_or_token]`            |
+| Deferred          | Idempotency keys, `Rack::Attack`, download token replay, full pagination           |
+
+

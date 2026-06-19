@@ -13,6 +13,7 @@ class DownloadLink < ApplicationRecord
     revoked_at.present?
   end
 
+  # Precedence: revoked → expired → limit_reached (expired wins when both expiry and cap apply).
   def status
     return :revoked if revoked?
     return :expired if expires_at <= Time.current

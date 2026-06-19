@@ -16,6 +16,7 @@ module Api
       end
 
       def orders
+        # Read-only dashboard feeds — capped for the take-home; production would paginate.
         orders = Order.includes(:product, download_links: :download_events)
                       .order(created_at: :desc)
                       .limit(50)
@@ -42,7 +43,7 @@ module Api
       def download_events
         events = DownloadEvent.includes(download_link: { order: :product })
                               .order(created_at: :desc)
-                              .limit(100)
+                              .limit(100) # see orders limit comment above
 
         render json: events.map { |e|
           link = e.download_link
