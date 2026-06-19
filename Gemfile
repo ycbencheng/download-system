@@ -40,6 +40,9 @@ gem "image_processing", "~> 1.2"
 
 gem "slim-rails", "~> 4.0"
 
+# Throttle abuse on the open write/download endpoints [https://github.com/rack/rack-attack]
+gem "rack-attack", "~> 6.7"
+
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri windows ], require: "debug/prelude"

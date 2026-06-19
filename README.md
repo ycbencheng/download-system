@@ -158,7 +158,7 @@ Step-by-step checklist: [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
 | Prefetch safety | GET landing read-only; POST confirms | Extra click; mitigates GET-only scanners, not POST bots |
 | Audit trail | `DownloadEvent` with `outcome`, best-effort after the UPDATE | Count can exceed event rows if audit insert fails; failed attempts logged only for existing links |
 | Email | `deliver_later` after commit | Order can exist without delivered mail if queue dies |
-| API surface | Open `POST /api/v1/orders`, no idempotency | Retries create duplicate orders/links |
+| API surface | Open `POST /api/v1/orders`, rate-limited, no idempotency | `Rack::Attack` bounds floods; retries still create duplicate orders/links |
 | Revocation | `revoked_at` timestamp only | In-flight POST may win before revoke is visible (TOCTOU) |
 | Token pages | `download` layout, no JavaScript | Dashboard needs separate Vite build |
 | Dashboard feeds | Orders/events capped at 50/100 rows | All products listed; pagination deferred |
@@ -187,11 +187,11 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 - Bearer-token model — link sharing is possible; two-step flow only stops prefetchers.
 - Token in the URL is documented, not mitigated — the raw token lands in access logs, browser history, and the `Referer` header. Gating blocks *unauthorized bytes*; it does not stop a leaked token from being replayed until expiry/cap/revoke.
 - No product-create UI — products via API, seeds, or console; dashboard is read-only.
-- Open order API — no auth or rate limiting; retries create duplicate orders (no idempotency key).
+- Open order API — no auth; rate-limited via `Rack::Attack`, but retries still create duplicate orders (no idempotency key).
 - Email delivery gap — order commits before `deliver_later`; queue failure means no email.
 - Revoke TOCTOU — in-flight POST may succeed before `revoked_at` is visible.
 - Count vs. event drift — `download_count` is canonical; failed `DownloadEvent` insert does not roll back delivery.
-- Attempt-logging is unbounded per link — failed attempts are audited only for existing links (never unknown tokens), but a single valid link can still be hammered; needs `Rack::Attack` in production.
+- Attempt-logging is per existing link only (never unknown tokens). `Rack::Attack` bounds the volume; the limits are coarse (per-IP) and would be tuned in production.
 - Streaming through Puma — `send_file` ships bytes from a worker. Fine for a stub; large files would block a worker and must move to presigned URLs / `X-Sendfile`.
 - Dashboard pagination — 50 recent orders, 100 recent events; all products uncapped.
 
@@ -200,17 +200,16 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 - **TLS is mandatory** — tokens travel in the URL path. `config.force_ssl = true` is enabled (with the `/up` health check excluded from the redirect). Set `APP_HOST` so generated links use the real host over `https`.
 - Presigned S3/GCS URLs (short TTL, 30–60s) instead of `send_file`, so the web server ships large files without tying up a worker. Caveat: a presigned URL stays valid for its whole TTL regardless of `revoke!`, so keep the TTL short.
 - SES/SMTP with outbox or dead-letter queue for email recovery.
-- `Rack::Attack` on order creation **and** the download confirm endpoint; `Idempotency-Key` deduplication on orders.
-- `DASHBOARD_TOKEN` for dashboard API auth (set in production; unset in dev/test).
+- `Idempotency-Key` deduplication on orders (sketch only; not implemented). Per-IP `Rack::Attack` throttling **is** in place (`config/initializers/rack_attack.rb`) on order creation and the download confirm endpoint; production would tune the limits.
+- Dashboard feeds expose buyer PII and **fail closed in production**: set `DASHBOARD_TOKEN` or the feeds return 401. The token is optional in dev/test.
 - Log scrubbing for raw tokens in `/d/:token` request paths.
 - Kamal/Docker files are Rails 8 defaults — not configured for this submission.
 
 **Deliberately deferred (decisions, not oversights)**
 
 - **Merchant product-create UI.** Products are created via `POST /api/v1/products`, seeds, or console. The brief's dashboard requirement is read-only and "can be minimal," so a write UI is out of scope.
-- **Migration consolidation.** `db/migrate/20260618140000_*` is unreachable dedupe cleanup (the unique index already exists). Migrations are append-only here, so it is left in place rather than silently rewritten — same honesty principle as the git history.
 - **Frontend unit-test infra.** Svelte 5 (`$state` runes) + vitest + testing-library + jsdom is real setup cost on a minimal read-only dashboard. The controller test already asserts the dashboard root renders; the one unit test worth adding would assert `Activity.svelte` renders a `limit_reached` outcome badge.
-- **Idempotency + rate limiting.** Sketch only: an `Idempotency-Key` header backed by a unique index returns the existing order on retry; `Rack::Attack` throttles order creation and the download confirm endpoint. Not implemented for the take-home.
+- **Idempotency.** Sketch only: an `Idempotency-Key` header backed by a unique index returns the existing order on retry. Not implemented (per-IP rate limiting via `Rack::Attack` is).
 
 ## Project structure
 

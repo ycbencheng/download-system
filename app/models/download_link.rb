@@ -29,6 +29,19 @@ class DownloadLink < ApplicationRecord
     end
   end
 
+  # Atomically consume one download. The limit, expiry, and revocation checks
+  # live in a single conditional UPDATE so the cap holds under concurrent POSTs
+  # (no read-then-increment race). Returns true if a download was consumed.
+  # The caller is responsible for reloading; update_all bypasses Active Record.
+  def consume
+    affected = DownloadLink
+      .where(id: id)
+      .where("download_count < max_downloads AND expires_at > ? AND revoked_at IS NULL", Time.current)
+      .update_all("download_count = download_count + 1")
+
+    affected == 1
+  end
+
   # Refund/chargeback kill switch. Enforcement of revocation happens atomically
   # in the confirm UPDATE (revoked_at IS NULL in the WHERE clause); this just
   # stamps the row. Triggered from console/rake — the dashboard stays read-only.

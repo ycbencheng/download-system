@@ -210,11 +210,30 @@ A later review caught that I had my priorities inverted, and I corrected course.
 - **Made the audit abuse-aware.** Added `outcome` to `DownloadEvent` (default `success`) and logged failed attempts — but only against links that exist, never unknown tokens, so the open endpoint cannot become an unbounded write vector.
 - **Made prod config honest.** `force_ssl` (tokens are in the URL), the `/up` redirect exclude, and `APP_HOST` over `https`.
 
-**Why this is the senior signal**
+**Takeaway**
 
-Breadth is not seniority. The fix that changed the verdict was one boundary (public file → gated stream), not a pile of new features. I also resisted building real S3, signed-URL infra, idempotency keys, rate limiting, and a product UI — those are documented next-steps, not take-home scope. Restraint plus an honest correction is more defensible than a wall of half-built features.
+Breadth is not seniority. The fix that changed the verdict was one boundary (public file → gated stream), not a pile of new features. I deferred real S3 / signed-URL infra, idempotency keys, and a product UI as documented next-steps rather than half-building them.
 
 **Inline override:** `app/controllers/downloads_controller.rb` (`send_file` + pre-increment file check) and `app/controllers/api/v1/orders_controller.rb` (no-retry comment).
+
+---
+
+### Prompt 8 — Hiring-panel review pass
+
+I ran the repo through a hard "senior + VP" review and acted on the findings that were defects rather than features.
+
+**What I changed**
+
+- **Killed the dead destructive migration.** The unique `order_id` index now lives in the original `create_download_links` migration; the later `DELETE … WHERE id NOT IN (MAX(id) GROUP BY order_id)` dedupe migration is gone. In a greenfield repo there were never duplicates to clean up, so keeping destructive no-op SQL was a liability, not "append-only honesty." Verified a from-scratch `db:migrate` reproduces the unique index and matches `schema.rb`.
+- **Collapsed the triplicated status→error ladder** into one `ERROR_RESPONSES` map in `DownloadsController`; `show` and the failed-`download` branch both render from it, so a message/status can't drift between copies.
+- **Extracted the atomic consume** into `DownloadLink#consume` so the core invariant has a model seam instead of being welded to the controller.
+- **Guarded the audit vocabulary.** A failed consume that re-reads as `:ok` (clock-skew edge) is coerced to `:limit_reached`, so we never persist or render an out-of-vocabulary outcome.
+- **Dashboard auth fails closed in production** — no `DASHBOARD_TOKEN` means 401, since the feeds carry buyer PII. Still optional in dev/test.
+- **Added per-IP `Rack::Attack`** on order create and download confirm (disabled in test), turning the documented abuse vector into a real, if coarse, limit.
+
+**What I deliberately did NOT do**
+
+Idempotency keys, presigned-URL infra, a product-creation UI, pagination, and frontend test tooling — still documented next-steps. The point of the pass was to fix unforced errors and consolidate, not to add breadth.
 
 ---
 
@@ -262,7 +281,7 @@ Breadth is not seniority. The fix that changed the verdict was one boundary (pub
 
 - **Bearer-token model** — Anyone with the URL can download; two-step flow stops scanners, not sharing.
 - **Token in the URL** — Documented, not mitigated: it leaks into logs, history, and `Referer`. Gating blocks unauthorized bytes; it does not stop a leaked token from being replayed until expiry/cap/revoke.
-- **Open APIs** — No auth on order/product create; production would add throttling and admin auth.
+- **Open APIs** — No auth on order/product create. Per-IP `Rack::Attack` throttling is in place; admin auth is still a production add.
 - **No idempotency** — Retried order requests create duplicate orders/links.
 - **Count vs event drift** — Possible if audit insert fails after increment (documented, logged).
 - **Shared stub file** — Every demo product points at one `storage/product_files/sample.pdf`; revocation kills the token, not the (shared) file. Production keys delivery on per-product storage via a short-lived presigned URL.
@@ -291,7 +310,9 @@ Short summary of system shape. Details also live in README and inline comments.
 | Product API       | `POST /api/v1/products` (no admin UI)                             |
 | Dashboard         | Read-only Svelte feeds; separate layout from download pages; orders/events capped |
 | Revocation        | `revoke!` / `rails download_links:revoke[id_or_token]`            |
+| Abuse limiting    | Per-IP `Rack::Attack` throttle on order create + download confirm (disabled in test) |
+| Dashboard auth    | Fails closed in production (`DASHBOARD_TOKEN` required); optional in dev/test |
 | Prod hardening    | `force_ssl` + `/up` exclude; `APP_HOST` over `https`             |
-| Deferred          | Idempotency keys, `Rack::Attack`, presigned URLs, product UI, frontend unit tests, full pagination |
+| Deferred          | Idempotency keys, presigned URLs, product UI, frontend unit tests, full pagination |
 
 

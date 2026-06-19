@@ -1,7 +1,9 @@
 class CreateDownloadLinks < ActiveRecord::Migration[8.1]
   def change
     create_table :download_links do |t|
-      t.references :order, null: false, foreign_key: { on_delete: :restrict }
+      # One download link per order, enforced at the database level.
+      t.references :order, null: false, foreign_key: { on_delete: :restrict },
+        index: { unique: true }
       # We store only SHA256(token); the raw token lives in the emailed URL.
       # Unique index doubles as the lookup path (indexed equality on the digest).
       t.string :token_digest, null: false

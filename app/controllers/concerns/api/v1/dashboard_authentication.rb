@@ -9,11 +9,19 @@ module Api
 
       private
 
-      # When DASHBOARD_TOKEN is set, dashboard JSON feeds require Bearer auth.
-      # Unset in dev/test by default so local review stays frictionless.
+      # The dashboard feeds expose buyer PII (emails, IPs, user agents), so they
+      # fail closed in production: no DASHBOARD_TOKEN means no access. In dev/test
+      # the token is optional so local review stays frictionless.
       def authenticate_dashboard!
         expected = ENV["DASHBOARD_TOKEN"]
-        return if expected.blank?
+
+        if expected.blank?
+          return unless Rails.env.production?
+
+          return render json: {
+            error: { code: "unauthorized", message: "Dashboard access is not configured" }
+          }, status: :unauthorized
+        end
 
         provided = request.authorization&.sub(/\ABearer /i, "") || params[:dashboard_token].to_s
         return if provided.present? && ActiveSupport::SecurityUtils.secure_compare(provided, expected)

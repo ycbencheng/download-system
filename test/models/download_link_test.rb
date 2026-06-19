@@ -116,4 +116,24 @@ class DownloadLinkTest < ActiveSupport::TestCase
   test "cannot be destroyed while it has download events" do
     assert_raises(ActiveRecord::DeleteRestrictionError) { download_links(:active).destroy! }
   end
+
+  test "consume increments the count once and returns true when usable" do
+    link = download_links(:active)
+    assert link.consume
+    assert_equal 1, link.reload.download_count
+  end
+
+  test "consume returns false and does not increment a maxed link" do
+    link = download_links(:maxed)
+    assert_not link.consume
+    assert_equal link.max_downloads, link.reload.download_count
+  end
+
+  test "consume returns false for an expired link" do
+    assert_not download_links(:expired).consume
+  end
+
+  test "consume returns false for a revoked link" do
+    assert_not download_links(:revoked).consume
+  end
 end
