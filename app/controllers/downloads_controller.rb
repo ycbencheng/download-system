@@ -79,7 +79,6 @@ class DownloadsController < ApplicationController
     if link.consume
       link.reload # update_all bypasses Active Record.
       log_download_event(link, "success")
-      # Token-gated stream: the controller is the only path to these bytes.
       send_file file_path, disposition: "attachment"
     else
       link.reload
