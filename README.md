@@ -201,7 +201,7 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 - Presigned S3/GCS URLs (short TTL, 30–60s) instead of `send_file`, so the web server ships large files without tying up a worker. Caveat: a presigned URL stays valid for its whole TTL regardless of `revoke!`, so keep the TTL short.
 - SES/SMTP with outbox or dead-letter queue for email recovery.
 - `Idempotency-Key` deduplication on orders (sketch only; not implemented). Per-IP `Rack::Attack` throttling **is** in place (`config/initializers/rack_attack.rb`) on order creation and the download confirm endpoint; production would tune the limits.
-- Dashboard feeds expose buyer PII and **fail closed in production**: set `DASHBOARD_TOKEN` or the feeds return 401. The token is optional in dev/test.
+- Dashboard feeds expose buyer PII and **fail closed in every deployed environment** (staging and production): set `DASHBOARD_TOKEN` or the feeds return 401. The token is optional only in dev/test (`Rails.env.local?`).
 - Log scrubbing for raw tokens in `/d/:token` request paths.
 - Kamal/Docker files are Rails 8 defaults — not configured for this submission.
 

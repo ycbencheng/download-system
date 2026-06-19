@@ -86,7 +86,7 @@ The hot path is a counted, time-limited resource. I needed one approach that sta
 
 AI's default Rails patterns (`find`, `increment!`) are readable but not safe enough here without additional locking. One conditional `UPDATE` is simpler to reason about and matches what I would ship.
 
-**Inline override:** `app/controllers/downloads_controller.rb` — see comments above `update_all` (Prompt 2).
+**Inline override:** `app/models/download_link.rb` — see comments above the `update_all` in `DownloadLink#consume` (Prompt 2).
 
 ---
 
@@ -165,7 +165,7 @@ AI's first instinct was transactional all-or-nothing: roll back the download if 
 
 The buyer paid for access; the limit is enforced on the link row, not the audit table. A missing event is ops-visible; a failed delivery is a support ticket.
 
-**Inline override:** `app/controllers/downloads_controller.rb` — comments above the `DownloadEvent` `begin/rescue` block.
+**Inline override:** `app/controllers/downloads_controller.rb` — comments above the rescue in `log_download_event`.
 
 ---
 
@@ -228,7 +228,7 @@ I ran the repo through a hard "senior + VP" review and acted on the findings tha
 - **Collapsed the triplicated status→error ladder** into one `ERROR_RESPONSES` map in `DownloadsController`; `show` and the failed-`download` branch both render from it, so a message/status can't drift between copies.
 - **Extracted the atomic consume** into `DownloadLink#consume` so the core invariant has a model seam instead of being welded to the controller.
 - **Guarded the audit vocabulary.** A failed consume that re-reads as `:ok` (clock-skew edge) is coerced to `:limit_reached`, so we never persist or render an out-of-vocabulary outcome.
-- **Dashboard auth fails closed in production** — no `DASHBOARD_TOKEN` means 401, since the feeds carry buyer PII. Still optional in dev/test.
+- **Dashboard auth fails closed in every deployed environment** — no `DASHBOARD_TOKEN` means 401 (the feeds carry buyer PII). Only dev/test (`Rails.env.local?`) stay open, so staging is protected too.
 - **Added per-IP `Rack::Attack`** on order create and download confirm (disabled in test), turning the documented abuse vector into a real, if coarse, limit.
 
 **What I deliberately did NOT do**
@@ -286,7 +286,7 @@ Idempotency keys, presigned-URL infra, a product-creation UI, pagination, and fr
 - **Count vs event drift** — Possible if audit insert fails after increment (documented, logged).
 - **Shared stub file** — Every demo product points at one `storage/product_files/sample.pdf`; revocation kills the token, not the (shared) file. Production keys delivery on per-product storage via a short-lived presigned URL.
 - **Streaming through Puma** — `send_file` is fine for a stub; large files would block a worker and move to presigned URLs / `X-Sendfile`.
-- **Idempotency / rate limiting** — Documented approaches only; not implemented.
+- **Rate limiting** — Per-IP `Rack::Attack` throttle on order create + download confirm is implemented (`config/initializers/rack_attack.rb`); idempotency keys are documented only, not implemented.
 - **Dashboard pagination** — Feeds capped at 50 orders / 100 events; see `DashboardController` limits.
 
 See README **Known Limitations** and **Production Considerations** for deploy notes.
@@ -311,7 +311,7 @@ Short summary of system shape. Details also live in README and inline comments.
 | Dashboard         | Read-only Svelte feeds; separate layout from download pages; orders/events capped |
 | Revocation        | `revoke!` / `rails download_links:revoke[id_or_token]`            |
 | Abuse limiting    | Per-IP `Rack::Attack` throttle on order create + download confirm (disabled in test) |
-| Dashboard auth    | Fails closed in production (`DASHBOARD_TOKEN` required); optional in dev/test |
+| Dashboard auth    | Fails closed in every deployed env (`DASHBOARD_TOKEN` required); open only in dev/test |
 | Prod hardening    | `force_ssl` + `/up` exclude; `APP_HOST` over `https`             |
 | Deferred          | Idempotency keys, presigned URLs, product UI, frontend unit tests, full pagination |
 
