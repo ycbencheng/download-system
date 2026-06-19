@@ -16,8 +16,8 @@ class CreateDownloadLinks < ActiveRecord::Migration[8.1]
     end
 
     add_index :download_links, :token_digest, unique: true
-    # The atomic confirm UPDATE relies on the count never going negative; the DB
-    # CHECK is the last line of defense behind the conditional WHERE clause.
+    # The confirm WHERE enforces download_count < max_downloads; this CHECK only
+    # guards against a negative count if something bypasses the app.
     add_check_constraint :download_links, "download_count >= 0", name: "download_links_count_non_negative"
   end
 end

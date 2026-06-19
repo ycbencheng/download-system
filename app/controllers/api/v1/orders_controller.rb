@@ -39,7 +39,8 @@ module Api
 
         download_url = download_url_for(raw_token)
 
-        # Enqueue after the transaction commits so the order exists before email sends.
+        # deliver_later runs outside the transaction block, so the order row is committed
+        # before the job is enqueued (email still sends asynchronously).
         DownloadMailer.link_email(order, download_url).deliver_later
 
         render json: {

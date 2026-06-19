@@ -11,7 +11,8 @@ Rails.application.routes.draw do
 
   root "dashboard#index"
 
-  # Two-step download: GET landing is read-only (prefetch/scanner-safe); POST consumes one download.
+  # Two-step download: GET landing is read-only; POST consumes one download.
+  # GET-only prefetch/scanners never touch download_count (POST bots still can).
   get "d/:token", to: "downloads#show", as: :download_landing
   post "d/:token", to: "downloads#download", as: :download_confirm
 

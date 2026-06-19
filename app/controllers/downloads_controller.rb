@@ -8,8 +8,8 @@ class DownloadsController < ApplicationController
   # HTML form POSTs from button_to include the CSRF token; JSON POSTs skip verification.
   skip_before_action :verify_authenticity_token, only: :download, if: -> { request.format.json? }
 
-  # GET show is read-only; POST download consumes one download. Prefetchers and
-  # email scanners typically issue GET only, so they cannot burn the limit.
+  # GET show is read-only; POST download consumes one download. GET-only clients
+  # (common prefetchers and email scanners) never increment download_count.
 
   def show
     @token = params[:token]
@@ -77,8 +77,8 @@ class DownloadsController < ApplicationController
     end
 
     # Single atomic conditional UPDATE — one round trip, safe under concurrent POSTs.
-    # update_all (not increment!) avoids row locks and keeps the guard in one SQL statement.
-    # revoked_at IS NULL in the WHERE clause enforces revocation alongside limit and expiry.
+    # update_all (not increment!) keeps limit, expiry, and revocation checks in one SQL
+    # statement; a separate read-then-increment can race under concurrent POSTs.
     updated = DownloadLink
       .where(id: link.id)
       .where("download_count < max_downloads AND expires_at > ? AND revoked_at IS NULL", Time.current)
@@ -101,7 +101,7 @@ class DownloadsController < ApplicationController
         )
       end
 
-      redirect_to DownloadDelivery.path_for(link.order.product), allow_other_host: false
+      redirect_to ::DownloadDelivery.path_for(link.order.product), allow_other_host: false
     else
       link.reload
 

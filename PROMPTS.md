@@ -78,7 +78,7 @@ The hot path is a counted, time-limited resource. I needed one approach that sta
 
 **What I changed**
 
-- Rejected row-level locks + `increment!` (extra round trips, contention)
+- Rejected read-then-`increment!` (extra round trips, races without a conditional WHERE)
 - Rejected optimistic locking / `lock_version` (retries, still multi-step)
 - Used `update_all` + `reload` instead of Active Record's usual increment helpers
 
@@ -211,7 +211,7 @@ Working code with broken docs or red CI signals carelessness. These fixes were a
 ## Where I overrode AI
 
 - AI suggested `request.base_url` for download URLs → configured `default_url_options` instead
-- AI suggested `increment!` / row locks for limits → single conditional `update_all`
+- AI suggested `increment!` without a conditional WHERE → single conditional `update_all`
 - AI suggested blocking scanners by user-agent → two-step GET/POST flow
 - AI suggested failing the download when audit insert fails → log and continue redirect
 - AI stored or suggested storing raw tokens → digest-only with unique index lookup
