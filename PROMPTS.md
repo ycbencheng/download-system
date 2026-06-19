@@ -158,12 +158,12 @@ AI's first instinct was transactional all-or-nothing: roll back the download if 
 
 **What I changed**
 
-- Wrapped event insert in `rescue`; log the error and still redirect to the file
+- Wrapped event insert in `rescue`; log the error and still deliver the file
 - Documented the drift risk in README Known Limitations
 
 **Why I changed it**
 
-The buyer paid for access; the limit is enforced on the link row, not the audit table. A missing event is ops-visible; a failed redirect is a support ticket.
+The buyer paid for access; the limit is enforced on the link row, not the audit table. A missing event is ops-visible; a failed delivery is a support ticket.
 
 **Inline override:** `app/controllers/downloads_controller.rb` — comments above the `DownloadEvent` `begin/rescue` block.
 
@@ -195,11 +195,37 @@ Working code with broken docs or red CI signals carelessness. These fixes were a
 
 ---
 
+### Prompt 7 — Second-pass realignment (the honest correction)
+
+A later review caught that I had my priorities inverted, and I corrected course.
+
+**What I got wrong the first time**
+
+- I added a **collision retry loop** (max 3 on `RecordNotUnique`) to defend a ~2^-128 SHA-256 digest collision — an event that cannot happen — while the actual bytes were served from `public/downloads/sample.pdf`. The link's expiry, cap, and revocation never protected the file: anyone could fetch `/downloads/sample.pdf` directly. I had hardened the impossible and left the front door open.
+
+**What I changed**
+
+- **Gated the bytes.** Moved the stub to `storage/product_files/` (outside `public/`) and switched the controller to `send_file`. The token is now the only path to the file, so expiry/cap/revocation actually mean something. The file is resolved and verified readable *before* the atomic increment, so a missing file never burns a download.
+- **Cut the retry loop.** A 256-bit random token makes a digest collision unreachable; the unique index is correctness insurance, not a hot path. If the impossible happens it surfaces as a 500 rather than hiding a real bug behind a retry. (The retry's `rescue RecordNotUnique` would also have mis-handled the unrelated `order_id` unique violation.)
+- **Made the audit abuse-aware.** Added `outcome` to `DownloadEvent` (default `success`) and logged failed attempts — but only against links that exist, never unknown tokens, so the open endpoint cannot become an unbounded write vector.
+- **Made prod config honest.** `force_ssl` (tokens are in the URL), the `/up` redirect exclude, and `APP_HOST` over `https`.
+
+**Why this is the senior signal**
+
+Breadth is not seniority. The fix that changed the verdict was one boundary (public file → gated stream), not a pile of new features. I also resisted building real S3, signed-URL infra, idempotency keys, rate limiting, and a product UI — those are documented next-steps, not take-home scope. Restraint plus an honest correction is more defensible than a wall of half-built features.
+
+**Inline override:** `app/controllers/downloads_controller.rb` (`send_file` + pre-increment file check) and `app/controllers/api/v1/orders_controller.rb` (no-retry comment).
+
+---
+
 ## Important judgment calls I made
 
+- **Gated file delivery** — Bytes live outside `public/` and stream via `send_file`; the token is the only path. File readability is checked before the increment so a missing file never consumes a download.
+- **No collision retry** — 256-bit token ⇒ unreachable digest collision; the unique index is a backstop, not a retry hot path. Deliberately surfaces as a 500 instead of masking a bug.
 - **Two-step download** — GET never consumes a download; POST does. Stops scanners from burning limits.
 - **Digest-only token storage** — Raw token exists only in the 201 response and buyer email; DB stores `SHA256(token)`.
 - **Atomic conditional UPDATE** — One SQL statement for limit + expiry + revocation checks under concurrency.
+- **Abuse-aware audit** — `DownloadEvent.outcome` records success and failed attempts (expired/limit/revoked) for *existing* links only; unknown tokens are never logged.
 - **Audit vs delivery** — Buyer gets the file even if `DownloadEvent` insert fails; `download_count` is canonical.
 - **Host-safe URLs** — Configured host, not request host, for links in API responses and email.
 - **Snapshot link settings** — `expires_at` and `max_downloads` copied at link creation; later product edits do not affect issued links.
@@ -210,10 +236,11 @@ Working code with broken docs or red CI signals carelessness. These fixes were a
 
 ## Where I overrode AI
 
+- AI (and my own first pass) defended an impossible digest collision while the file was public → cut the retry, gated the bytes
 - AI suggested `request.base_url` for download URLs → configured `default_url_options` instead
 - AI suggested `increment!` without a conditional WHERE → single conditional `update_all`
 - AI suggested blocking scanners by user-agent → two-step GET/POST flow
-- AI suggested failing the download when audit insert fails → log and continue redirect
+- AI suggested failing the download when audit insert fails → log and continue delivery
 - AI stored or suggested storing raw tokens → digest-only with unique index lookup
 - AI duplicated status logic in controllers → moved to `DownloadLink#status`
 - AI's first refactor passes added layers I did not need → kept interfaces minimal for a take-home
@@ -221,11 +248,12 @@ Working code with broken docs or red CI signals carelessness. These fixes were a
 ## Verification I did myself
 
 - `bin/rails test` — full suite including API, model, concurrency, rake, and seed tests
-- `bin/rails test:system` — order API → landing page → download redirect flow
-- Parallel POST concurrency test (`downloads_concurrency_test.rb`) — 10 threads, `max_downloads: 5`, assert exactly 5 succeed
+- `bin/rails test:system` — order API → landing page → confirm click consumes one download
+- Parallel POST concurrency test (`downloads_concurrency_test.rb`) — 10 threads, `max_downloads: 5`, assert exactly 5 succeed and every attempt is audited (5 `success` + 5 `limit_reached`)
+- Gated delivery — `send_file` returns 200 + `Content-Disposition: attachment`; a missing file returns 500 without consuming a download
+- Failure-outcome audit — POSTs to expired/maxed/revoked links log the matching `outcome`; unknown tokens write nothing
 - Nested and flat order param shapes both return 201
-- Host-header spoof test on order API — URL us***Inline***es configured host, not attacker host
-- Token digest collision retry — simulates `RecordNotUnique` on first save, asserts retry succeeds
+- Host-header spoof test on order API — URL uses configured host, not attacker host
 - Manual smoke via README curl examples (orders + products)
 - `npm run build && npm run check` for dashboard frontend
 - Confirmed GET landing does not change `download_count`; POST does
@@ -233,11 +261,13 @@ Working code with broken docs or red CI signals carelessness. These fixes were a
 ## Known limitations
 
 - **Bearer-token model** — Anyone with the URL can download; two-step flow stops scanners, not sharing.
+- **Token in the URL** — Documented, not mitigated: it leaks into logs, history, and `Referer`. Gating blocks unauthorized bytes; it does not stop a leaked token from being replayed until expiry/cap/revoke.
 - **Open APIs** — No auth on order/product create; production would add throttling and admin auth.
 - **No idempotency** — Retried order requests create duplicate orders/links.
 - **Count vs event drift** — Possible if audit insert fails after increment (documented, logged).
-- **Placeholder file serving** — `public/downloads/sample.pdf` is not revocation-aware; production would use presigned URLs.
-- **Idempotency / rate limiting** — Documented approaches only; not fully implemented.
+- **Shared stub file** — Every demo product points at one `storage/product_files/sample.pdf`; revocation kills the token, not the (shared) file. Production keys delivery on per-product storage via a short-lived presigned URL.
+- **Streaming through Puma** — `send_file` is fine for a stub; large files would block a worker and move to presigned URLs / `X-Sendfile`.
+- **Idempotency / rate limiting** — Documented approaches only; not implemented.
 - **Dashboard pagination** — Feeds capped at 50 orders / 100 events; see `DashboardController` limits.
 
 See README **Known Limitations** and **Production Considerations** for deploy notes.
@@ -252,12 +282,16 @@ Short summary of system shape. Details also live in README and inline comments.
 | Area              | Choice                                                            |
 | ----------------- | ----------------------------------------------------------------- |
 | Download flow     | GET `/d/:token` (read-only) → POST `/d/:token` (consume)          |
+| File delivery     | Token-gated `send_file` from `storage/product_files/`; file verified before increment; no fallback |
 | Limit enforcement | Conditional `UPDATE` on `download_links`                          |
 | Token storage     | `SHA256(token)` digest, unique index lookup                       |
-| Order API         | Nested or flat params; email after commit; digest collision retry |
+| Token collision   | No retry — unreachable at 256 bits; unique index is the backstop  |
+| Audit             | `DownloadEvent.outcome` (success + failed attempts on existing links only) |
+| Order API         | Nested or flat params; email after commit                        |
 | Product API       | `POST /api/v1/products` (no admin UI)                             |
 | Dashboard         | Read-only Svelte feeds; separate layout from download pages; orders/events capped |
 | Revocation        | `revoke!` / `rails download_links:revoke[id_or_token]`            |
-| Deferred          | Idempotency keys, `Rack::Attack`, download token replay, full pagination           |
+| Prod hardening    | `force_ssl` + `/up` exclude; `APP_HOST` over `https`             |
+| Deferred          | Idempotency keys, `Rack::Attack`, presigned URLs, product UI, frontend unit tests, full pagination |
 
 

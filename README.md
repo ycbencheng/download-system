@@ -27,8 +27,8 @@ Or use `bin/setup` (add `--reset` to drop and reseed; `--skip-server` to stop be
 | ---- | ---------- |
 | **Products** | `POST /api/v1/products` creates products with name, file stub, `expiry_hours`, and `max_downloads`. Seeds provide demo products. |
 | **Orders & links** | `POST /api/v1/orders` creates an order, issues a unique expiring link, returns `download_url`, and queues buyer email. |
-| **Downloads** | `GET /d/:token` shows a landing page; `POST /d/:token` delivers the file until expiry, cap, or revoke — each state returns the correct HTTP error. |
-| **Dashboard** | Svelte/TypeScript dashboard at `/` lists products, recent orders, and download events. |
+| **Downloads** | `GET /d/:token` shows a landing page; `POST /d/:token` streams the file (token-gated, never a public URL) until expiry, cap, or revoke — each state returns the correct HTTP error. |
+| **Dashboard** | Svelte/TypeScript dashboard at `/` lists products, recent orders, and download activity (success + failed-attempt outcomes). |
 
 ## Demo data and sample flows
 
@@ -41,7 +41,7 @@ Seeds create four download links covering every error state. Paste each URL into
 | Maxed   | `http://localhost:3000/d/dev-maxed-link-token`   | 403, "Download limit reached" |
 | Revoked | `http://localhost:3000/d/dev-revoked-link-token` | 410, "Download link revoked" |
 
-Clicking `Download` on the normal link redirects to `public/downloads/sample.pdf`. The database stores only `SHA256(token)`; raw tokens exist in `db/seeds.rb` and issued URLs.
+Clicking `Download` on the normal link streams the stub file (`storage/product_files/sample.pdf`) through the token-gated controller — the bytes are **not** served from `public/`, so expiry, cap, and revocation actually protect them. The database stores only `SHA256(token)`; raw tokens exist in `db/seeds.rb` and issued URLs.
 
 Create a new order via the API:
 
@@ -85,14 +85,16 @@ flowchart TD
   st -->|limit| f1["403 limit"]
   st -->|ok| btn["landing page + POST Download button"]
   btn --> post["POST /d/:token (confirm)"]
-  post --> atomic["atomic UPDATE: count++ WHERE count<max AND not expired AND revoked_at IS NULL"]
-  atomic -->|"1 row"| ok["reload, log DownloadEvent, 302 → /public file"]
+  post --> chk{"file readable?"}
+  chk -->|no| err["500 (no download consumed)"]
+  chk -->|yes| atomic["atomic UPDATE: count++ WHERE count<max AND not expired AND revoked_at IS NULL"]
+  atomic -->|"1 row"| ok["reload, log success event, send_file (200, attachment)"]
   atomic -->|"0 rows"| re{"re-read to classify"}
-  re -->|revoked/expired| gone["410"]
-  re -->|limit| forbidden["403"]
+  re -->|revoked/expired| gone["410 + log outcome"]
+  re -->|limit| forbidden["403 + log outcome"]
 ```
 
-Download-limit enforcement is a single atomic conditional `UPDATE` (no read-then-write), so the cap cannot be exceeded under concurrency. The raw 256-bit token lives only in the emailed URL; the database stores `SHA256(token)` and looks up by indexed digest.
+The file path is resolved and verified readable **before** the atomic `UPDATE`, so a missing file never consumes one of the buyer's downloads. Download-limit enforcement is a single atomic conditional `UPDATE` (no read-then-write), so the cap cannot be exceeded under concurrency. The raw 256-bit token lives only in the emailed URL; the database stores `SHA256(token)` and looks up by indexed digest. Delivery uses `send_file` — the controller is the only path to the bytes (see [Gated file delivery](#design-decisions-and-tradeoffs)).
 
 ### Error → HTTP status
 
@@ -122,14 +124,14 @@ npm ci && npm run build && npm run check
 
 CI runs Brakeman, Bundler Audit, RuboCop, JavaScript audit/build, and the full test suite on push/PR to `main`.
 
-**Concurrency test.** `test/controllers/downloads_concurrency_test.rb` fires 10 parallel `POST /d/:token` requests against a link with `max_downloads: 5`. It disables transactional fixtures and raises the connection pool to at least 15. If you see pool timeouts running that file alone, set `RAILS_MAX_THREADS=15` (or higher) before `bin/rails test`.
+**Concurrency test.** `test/controllers/downloads_concurrency_test.rb` fires 10 parallel `POST /d/:token` requests against a link with `max_downloads: 5` and asserts exactly 5 succeed (and that every attempt is audited: 5 `success` + 5 `limit_reached` rows). It disables transactional fixtures and raises the connection pool to at least 15. Known wart: it does that by mutating the global pool with `establish_connection`, which leaks into later tests in the same process; it is isolated (`parallelize(workers: 1)`) and left as-is rather than risking churn. If you see pool timeouts running that file alone, set `RAILS_MAX_THREADS=15` (or higher) before `bin/rails test`.
 
 **Manual smoke checks** (against a running `bin/dev` server):
 
 - `GET /up` → 200
 - Seed error matrix: expired/maxed/revoked/bogus tokens → 410/403/410/404
 - `POST /api/v1/orders` → 201 with `download_url`; missing product → 404; invalid email → 422
-- Active link: `GET` → 200 landing; `POST` → 302 to `/downloads/sample.pdf`
+- Active link: `GET` → 200 landing; `POST` → 200 file stream (`Content-Disposition: attachment`)
 - `download_links:revoke` prints idempotent message on already-revoked link
 
 Step-by-step checklist: [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
@@ -138,9 +140,9 @@ Step-by-step checklist: [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
 
 **Assumptions**
 
-- **Bearer URL = access.** Anyone with `/d/:token` can download until expiry, cap, or revoke. No per-buyer auth.
+- **Bearer URL = access.** Anyone with `/d/:token` can download until expiry, cap, or revoke. No per-buyer auth. "Gated" means unauthorized bytes are blocked — not that the token cannot leak (see [Known limitations](#known-limitations-and-production-notes)).
 - **Settings snapshotted** onto each `DownloadLink` at order time. Changing a product later does not alter issued links.
-- **Placeholder delivery.** Downloads redirect to static `public/downloads/sample.pdf`, not per-product bytes.
+- **Gated stub delivery.** Every demo product points at one stub, `storage/product_files/sample.pdf` (outside `public/`). `DownloadDelivery` resolves `File.basename(product.file_name)` under that directory and `send_file`s it; production swaps this for a short-lived presigned URL.
 - **Configured host.** `download_url` is built from `action_mailer.default_url_options`, not the request `Host` header.
 - **Seeds reset rows, not usage.** Re-running `db:seed` does not reset `download_count` on a maxed demo link; use `bin/rails db:prepare` or reset the link manually.
 
@@ -148,20 +150,24 @@ Step-by-step checklist: [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
 
 | Area | Choice | Cost |
 | ---- | ------ | ---- |
+| File delivery | Token-gated `send_file` from `storage/product_files/` | Streams through Puma (fine for a stub; production uses presigned URLs for large files) |
+| Delivery safety | Resolve + verify file readable **before** the increment | One extra `File.file?`/`readable?` per download |
+| No file fallback | Missing file → 500, never serve the wrong bytes | A misconfigured product fails loudly instead of silently shipping `sample.pdf` |
 | Download enforcement | Single conditional `UPDATE` | Atomic guard in one statement; `update_all` bypasses AR callbacks |
+| Token collision | No retry on `RecordNotUnique` | A ~2^-128 digest collision surfaces as a 500 instead of hiding a real bug behind a retry |
 | Prefetch safety | GET landing read-only; POST confirms | Extra click; mitigates GET-only scanners, not POST bots |
-| Audit trail | `DownloadEvent` after increment | Count can exceed event rows if audit insert fails |
+| Audit trail | `DownloadEvent` with `outcome`, best-effort after the UPDATE | Count can exceed event rows if audit insert fails; failed attempts logged only for existing links |
 | Email | `deliver_later` after commit | Order can exist without delivered mail if queue dies |
 | API surface | Open `POST /api/v1/orders`, no idempotency | Retries create duplicate orders/links |
 | Revocation | `revoked_at` timestamp only | In-flight POST may win before revoke is visible (TOCTOU) |
 | Token pages | `download` layout, no JavaScript | Dashboard needs separate Vite build |
 | Dashboard feeds | Orders/events capped at 50/100 rows | All products listed; pagination deferred |
 
-Design rationale: [PROMPTS.md](PROMPTS.md).
+Design rationale and the mid-project realignment: [PROMPTS.md](PROMPTS.md).
 
 ## Operational tasks
 
-**Revoke a link** (blocks `/d/:token` GET and POST; does not remove `public/downloads/sample.pdf`):
+**Revoke a link** (blocks `/d/:token` GET and POST; the stub file in `storage/product_files/` is shared, so revocation kills the token, not the file):
 
 ```bash
 bin/rails 'download_links:revoke[42]'                    # by database ID
@@ -179,23 +185,32 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 **Gaps in this take-home**
 
 - Bearer-token model — link sharing is possible; two-step flow only stops prefetchers.
+- Token in the URL is documented, not mitigated — the raw token lands in access logs, browser history, and the `Referer` header. Gating blocks *unauthorized bytes*; it does not stop a leaked token from being replayed until expiry/cap/revoke.
 - No product-create UI — products via API, seeds, or console; dashboard is read-only.
 - Open order API — no auth or rate limiting; retries create duplicate orders (no idempotency key).
 - Email delivery gap — order commits before `deliver_later`; queue failure means no email.
 - Revoke TOCTOU — in-flight POST may succeed before `revoked_at` is visible.
-- Public placeholder bytes — revocation blocks the token route, not direct `/downloads/sample.pdf` access.
 - Count vs. event drift — `download_count` is canonical; failed `DownloadEvent` insert does not roll back delivery.
-- Token in logs — raw tokens appear in `/d/:token` request paths.
+- Attempt-logging is unbounded per link — failed attempts are audited only for existing links (never unknown tokens), but a single valid link can still be hammered; needs `Rack::Attack` in production.
+- Streaming through Puma — `send_file` ships bytes from a worker. Fine for a stub; large files would block a worker and must move to presigned URLs / `X-Sendfile`.
 - Dashboard pagination — 50 recent orders, 100 recent events; all products uncapped.
 
 **What would change for production**
 
-- Presigned S3/GCS URLs instead of static public files; never proxy bytes through Rails.
+- **TLS is mandatory** — tokens travel in the URL path. `config.force_ssl = true` is enabled (with the `/up` health check excluded from the redirect). Set `APP_HOST` so generated links use the real host over `https`.
+- Presigned S3/GCS URLs (short TTL, 30–60s) instead of `send_file`, so the web server ships large files without tying up a worker. Caveat: a presigned URL stays valid for its whole TTL regardless of `revoke!`, so keep the TTL short.
 - SES/SMTP with outbox or dead-letter queue for email recovery.
-- `Rack::Attack` on order creation; `Idempotency-Key` deduplication.
+- `Rack::Attack` on order creation **and** the download confirm endpoint; `Idempotency-Key` deduplication on orders.
 - `DASHBOARD_TOKEN` for dashboard API auth (set in production; unset in dev/test).
-- Log scrubbing for raw tokens; host set in `config/environments/production.rb`.
+- Log scrubbing for raw tokens in `/d/:token` request paths.
 - Kamal/Docker files are Rails 8 defaults — not configured for this submission.
+
+**Deliberately deferred (decisions, not oversights)**
+
+- **Merchant product-create UI.** Products are created via `POST /api/v1/products`, seeds, or console. The brief's dashboard requirement is read-only and "can be minimal," so a write UI is out of scope.
+- **Migration consolidation.** `db/migrate/20260618140000_*` is unreachable dedupe cleanup (the unique index already exists). Migrations are append-only here, so it is left in place rather than silently rewritten — same honesty principle as the git history.
+- **Frontend unit-test infra.** Svelte 5 (`$state` runes) + vitest + testing-library + jsdom is real setup cost on a minimal read-only dashboard. The controller test already asserts the dashboard root renders; the one unit test worth adding would assert `Activity.svelte` renders a `limit_reached` outcome badge.
+- **Idempotency + rate limiting.** Sketch only: an `Idempotency-Key` header backed by a unique index returns the existing order on retry; `Rack::Attack` throttles order creation and the download confirm endpoint. Not implemented for the take-home.
 
 ## Project structure
 

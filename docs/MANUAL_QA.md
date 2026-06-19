@@ -22,8 +22,9 @@ Run with `bin/dev` and Postgres up.
 
 - [ ] Reset `download_count` on dev active link if needed
 - [ ] `GET /d/dev-active-link-token` → 200 landing, no `<script>` tags
-- [ ] `POST` (Download button) → 302 to `/downloads/sample.pdf`
-- [ ] `public/downloads/sample.pdf` exists on disk
+- [ ] `POST` (Download button) → 200 file stream with `Content-Disposition: attachment`
+- [ ] `storage/product_files/sample.pdf` exists on disk; the file is NOT reachable at `/downloads/sample.pdf`
+- [ ] Download Activity shows the success row; failed attempts (expired/maxed/revoked links) show their outcome
 
 ## Revocation
 
