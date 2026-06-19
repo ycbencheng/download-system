@@ -2,20 +2,31 @@ module Api
   module V1
     class OrdersController < BaseController
       def create
-        product = Product.find(params.require(:product_id))
-        order = product.orders.new(buyer_email: params.require(:buyer_email))
+        product = Product.find(order_params.require(:product_id))
+        order = product.orders.new(buyer_email: order_params.require(:buyer_email))
 
-        raw_token = SecureRandom.urlsafe_base64(32)
-        # Store SHA256(token), not the raw value. Lookup is by digest on a unique index.
-        token_digest = Digest::SHA256.hexdigest(raw_token)
+        raw_token = nil
+        token_digest = nil
+        retries = 0
 
-        ActiveRecord::Base.transaction do
-          order.save!
-          order.download_links.create!(
-            token_digest: token_digest,
-            expires_at: order.created_at + product.expiry_hours.hours,
-            max_downloads: product.max_downloads
-          )
+        begin
+          raw_token = SecureRandom.urlsafe_base64(32)
+          # Store SHA256(token), not the raw value. Lookup is by digest on a unique index.
+          token_digest = Digest::SHA256.hexdigest(raw_token)
+
+          ActiveRecord::Base.transaction do
+            order.save!
+            order.download_links.create!(
+              token_digest: token_digest,
+              expires_at: order.created_at + product.expiry_hours.hours,
+              max_downloads: product.max_downloads
+            )
+          end
+        rescue ActiveRecord::RecordNotUnique
+          retries += 1
+          order = product.orders.new(buyer_email: order_params.require(:buyer_email))
+          retry if retries < 3
+          raise
         end
 
         download_url = download_url_for(raw_token)
@@ -33,8 +44,15 @@ module Api
 
       private
 
+      def order_params
+        source = params[:order].present? ? params.require(:order) : params
+        source.permit(:product_id, :buyer_email)
+      end
+
+      # Use configured host, not request.base_url — prevents Host-header poisoning in download URLs.
       def download_url_for(token)
-        "#{request.base_url}/d/#{token}"
+        opts = Rails.application.config.action_mailer.default_url_options
+        download_landing_url(token, **opts)
       end
     end
   end

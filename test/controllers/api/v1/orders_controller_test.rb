@@ -32,18 +32,58 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "POST /api/v1/orders returns 404 for missing product" do
-    assert_no_difference "Order.count" do
-      post api_v1_orders_url, params: { product_id: 0, buyer_email: "buyer@example.com" }, as: :json
+    assert_no_enqueued_emails do
+      assert_no_difference "Order.count" do
+        post api_v1_orders_url, params: { product_id: 0, buyer_email: "buyer@example.com" }, as: :json
+      end
     end
 
     assert_response :not_found
     body = response.parsed_body
     assert_equal "not_found", body.dig("error", "code")
+    assert_equal "Resource not found", body.dig("error", "message")
+  end
+
+  test "POST /api/v1/orders accepts nested order params (README curl shape)" do
+    assert_difference -> { Order.count } => 1, -> { DownloadLink.count } => 1 do
+      post api_v1_orders_url,
+        params: { order: { product_id: @product.id, buyer_email: "nested@example.com" } },
+        as: :json
+    end
+
+    assert_response :created
+    assert_equal "nested@example.com", Order.find(response.parsed_body["order_id"]).buyer_email
+  end
+
+  test "POST /api/v1/orders retries on token digest collision" do
+    attempts = 0
+    original_save = DownloadLink.instance_method(:save!)
+    DownloadLink.define_method(:save!) do |*args, **kwargs, &block|
+      if new_record?
+        attempts += 1
+        raise ActiveRecord::RecordNotUnique.new("PG::UniqueViolation") if attempts == 1
+      end
+
+      original_save.bind(self).call(*args, **kwargs, &block)
+    end
+
+    assert_difference -> { Order.count } => 1, -> { DownloadLink.count } => 1 do
+      post api_v1_orders_url,
+        params: { product_id: @product.id, buyer_email: "collision@example.com" },
+        as: :json
+    end
+
+    assert_response :created
+    assert_equal 2, attempts
+  ensure
+    DownloadLink.define_method(:save!, original_save) if original_save
   end
 
   test "POST /api/v1/orders returns 422 for invalid email" do
-    assert_no_difference "Order.count" do
-      post api_v1_orders_url, params: { product_id: @product.id, buyer_email: "not-an-email" }, as: :json
+    assert_no_enqueued_emails do
+      assert_no_difference "Order.count" do
+        post api_v1_orders_url, params: { product_id: @product.id, buyer_email: "not-an-email" }, as: :json
+      end
     end
 
     assert_response :unprocessable_entity
@@ -52,8 +92,10 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "POST /api/v1/orders returns 422 for missing buyer_email" do
-    assert_no_difference "Order.count" do
-      post api_v1_orders_url, params: { product_id: @product.id }, as: :json
+    assert_no_enqueued_emails do
+      assert_no_difference "Order.count" do
+        post api_v1_orders_url, params: { product_id: @product.id }, as: :json
+      end
     end
 
     assert_response :unprocessable_entity
@@ -91,5 +133,39 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     link = Order.last.download_links.first
     expected_digest = Digest::SHA256.hexdigest(raw_token)
     assert_equal expected_digest, link.token_digest
+  end
+
+  test "POST /api/v1/orders ignores spoofed Host header when building download_url" do
+    post api_v1_orders_url,
+      params: { product_id: @product.id, buyer_email: "buyer@example.com" },
+      headers: { "Host" => "evil.com" },
+      as: :json
+
+    assert_response :created
+    download_url = response.parsed_body["download_url"]
+    assert_includes download_url, "example.com"
+    assert_not_includes download_url, "evil.com"
+  end
+
+  test "POST /api/v1/orders rolls back order when link creation fails" do
+    original_save = DownloadLink.instance_method(:save!)
+    DownloadLink.define_method(:save!) do |*args, **kwargs, &block|
+      if new_record?
+        errors.add(:base, "simulated failure")
+        raise ActiveRecord::RecordInvalid.new(self)
+      end
+
+      original_save.bind(self).call(*args, **kwargs, &block)
+    end
+
+    assert_no_difference "Order.count" do
+      post api_v1_orders_url,
+        params: { product_id: @product.id, buyer_email: "buyer@example.com" },
+        as: :json
+    end
+
+    assert_response :unprocessable_entity
+  ensure
+    DownloadLink.define_method(:save!, original_save) if original_save
   end
 end

@@ -33,7 +33,7 @@ module Api
               max_downloads: link.max_downloads,
               download_count: link.download_count,
               revoked: link.revoked?,
-              status: link_status(link)
+              status: link.status_label
             }
           }
         }
@@ -56,16 +56,6 @@ module Api
             product_name: link.order.product.name
           }
         }
-      end
-
-      private
-
-      def link_status(link)
-        return "revoked" if link.revoked?
-        return "expired" if link.expires_at <= Time.current
-        return "limit_reached" if link.download_count >= link.max_downloads
-
-        "active"
       end
     end
   end

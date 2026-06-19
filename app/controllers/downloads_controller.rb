@@ -28,7 +28,7 @@ class DownloadsController < ApplicationController
     @link = link
     @product = link.order.product
 
-    case link_status(link)
+    case link.status
     when :revoked
       render_download_error(
         status: :gone,
@@ -78,6 +78,7 @@ class DownloadsController < ApplicationController
     end
 
     # Single atomic conditional UPDATE — one round trip, safe under concurrent POSTs.
+    # update_all (not increment!) avoids row locks and keeps the guard in one SQL statement.
     # revoked_at IS NULL in the WHERE clause enforces revocation alongside limit and expiry.
     updated = DownloadLink
       .where(id: link.id)
@@ -89,16 +90,23 @@ class DownloadsController < ApplicationController
       link.reload
 
       # DownloadEvent is audit-only; download_count on the link is canonical.
-      link.download_events.create!(
-        ip: request.remote_ip,
-        user_agent: request.user_agent
-      )
+      # Buyer still gets the file if audit insert fails — intentional tradeoff.
+      begin
+        link.download_events.create!(
+          ip: request.remote_ip,
+          user_agent: request.user_agent
+        )
+      rescue StandardError => e
+        Rails.logger.error(
+          "DownloadEvent insert failed for link #{link.id}: #{e.class}: #{e.message}"
+        )
+      end
 
       redirect_to PLACEHOLDER_FILE, allow_other_host: false
     else
       link.reload
 
-      case link_status(link)
+      case link.status
       when :revoked
         render_download_error(
           status: :gone,

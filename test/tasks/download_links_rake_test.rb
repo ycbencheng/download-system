@@ -45,4 +45,27 @@ class DownloadLinksRakeTest < ActiveSupport::TestCase
       Rake::Task["download_links:revoke"].invoke(0)
     end
   end
+
+  test "revoke task accepts raw token and sets revoked_at" do
+    link = download_links(:active)
+    assert_not link.revoked?
+
+    freeze_time do
+      Rake::Task["download_links:revoke"].reenable
+      assert_output(/revoked at/) do
+        Rake::Task["download_links:revoke"].invoke("fixture-active-token")
+      end
+
+      link.reload
+      assert link.revoked?
+      assert_equal Time.current, link.revoked_at
+    end
+  end
+
+  test "revoke task raises for unknown token" do
+    Rake::Task["download_links:revoke"].reenable
+    assert_raises(ActiveRecord::RecordNotFound) do
+      Rake::Task["download_links:revoke"].invoke("bogus-token")
+    end
+  end
 end

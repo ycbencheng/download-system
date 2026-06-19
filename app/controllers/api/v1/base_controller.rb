@@ -1,8 +1,8 @@
 module Api
   module V1
     class BaseController < ActionController::API
-      rescue_from ActiveRecord::RecordNotFound do |e|
-        render json: { error: { code: "not_found", message: e.message } }, status: :not_found
+      rescue_from ActiveRecord::RecordNotFound do
+        render json: { error: { code: "not_found", message: "Resource not found" } }, status: :not_found
       end
 
       rescue_from ActiveRecord::RecordInvalid do |e|

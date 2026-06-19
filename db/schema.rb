@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_18_120004) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_18_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -34,6 +34,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_18_120004) do
     t.datetime "updated_at", null: false
     t.index ["order_id"], name: "index_download_links_on_order_id"
     t.index ["token_digest"], name: "index_download_links_on_token_digest", unique: true
+    t.check_constraint "download_count <= max_downloads", name: "download_links_count_within_max"
     t.check_constraint "download_count >= 0", name: "download_links_count_non_negative"
   end
 

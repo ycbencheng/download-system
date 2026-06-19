@@ -24,15 +24,15 @@ Download System sells digital products. When a buyer completes a purchase, they 
 - **PostgreSQL** — primary database
 - **Solid Queue** — background jobs (email delivery in production)
 - **Letter Opener** — preview emails in the browser during development
-- **Slim** — view templates
-- **Stimulus / Turbo** — default Rails frontend (dashboard may add Svelte/TypeScript)
+- **Slim** — view templates for download pages and dashboard shell
+- **vite_rails** + **Svelte 5** + **TypeScript** — dashboard frontend only (`app/frontend/`)
 
 ## Prerequisites
 
 - Ruby 3.4.9 (see `.ruby-version`)
 - Bundler
 - PostgreSQL 9.5+
-- Node is not required unless you add a Svelte frontend build step
+- **Node 20** (see `.node-version`) — required to build the dashboard (`npm ci && npm run build`). The Rails backend and `bin/rails test` run without Node.
 
 ## Setup
 
@@ -93,7 +93,15 @@ Successful response (`201 Created`):
 }
 ```
 
-The same URL is also emailed to the buyer (via Letter Opener in development). Missing product -> `404`; invalid email or missing fields -> `422`; all errors follow the `{ "error": { "code", "message" } }` envelope.
+The same URL is also emailed to the buyer (via Letter Opener in development). Flat params (`{"product_id": 1, "buyer_email": "…"}`) also work. Missing product -> `404`; invalid email or missing fields -> `422`; all errors follow the `{ "error": { "code", "message" } }` envelope.
+
+Create a product via the API:
+
+```bash
+curl -i -X POST http://localhost:3000/api/v1/products \
+  -H "Content-Type: application/json" \
+  -d '{"product": {"name": "New Ebook", "file_name": "new.pdf", "expiry_hours": 48, "max_downloads": 5}}'
+```
 
 ### Background jobs
 
@@ -114,7 +122,13 @@ bin/rails test
 bin/rails test:system
 ```
 
-CI runs Brakeman, Bundler Audit, RuboCop, and the test suite on push/PR to `main`.
+Dashboard frontend (optional, needs Node 20):
+
+```bash
+npm ci && npm run build && npm run check
+```
+
+CI runs Brakeman, Bundler Audit, RuboCop, JavaScript audit/build, and the test suite on push/PR to `main`.
 
 The download-limit concurrency test (`test/controllers/downloads_concurrency_test.rb`)
 fires 10 parallel `POST /d/:token` requests against a link with `max_downloads: 5`. It
@@ -182,6 +196,51 @@ The raw 256-bit token lives only in the emailed URL; the database stores only
 
 Browsers get friendly HTML pages; API clients get JSON via `respond_to`.
 
+## Revoking a link
+
+Revocation blocks `/d/:token` (GET and POST) but does **not** remove the public placeholder at `/downloads/sample.pdf`. In production, files would be served via presigned URLs instead.
+
+```bash
+# By numeric database ID
+bin/rails 'download_links:revoke[42]'
+
+# By raw token from the buyer URL (zsh requires quotes around the task argument)
+bin/rails 'download_links:revoke[dev-active-link-token]'
+```
+
+Re-running revoke on an already-revoked link prints an "already revoked" message without changing `revoked_at`.
+
+## Known Limitations
+
+- **Bearer-token model** — Anyone with the URL can download. The two-step landing page stops email scanners from burning the limit, but it does not prevent link sharing.
+- **No product-create UI** — Products are created via `POST /api/v1/products`, seeds, or console; the dashboard is read-only.
+- **Open order API** — `POST /api/v1/orders` is unauthenticated. A bad actor could email-bomb arbitrary addresses; production would add `Rack::Attack` throttling.
+- **No idempotency** — Retrying a failed order request creates duplicate orders and links. Production would accept an `Idempotency-Key` header and deduplicate within a TTL window.
+- **Email delivery gap** — The order transaction commits before `deliver_later` runs. If the job queue fails after commit, the buyer gets no email even though the order exists; an outbox table or recoverable "resend link" flow would close this gap.
+- **Revoke TOCTOU** — An in-flight `POST /d/:token` may succeed if the atomic UPDATE runs before `revoked_at` is visible to that connection.
+- **Revoke audit trail** — `revoke!` stamps `revoked_at` only; there is no `revoked_by` or reason field. Production would log to an audit table.
+- **Public placeholder bytes** — Revocation blocks the token route, not direct access to `public/downloads/sample.pdf`. Production uses short-lived presigned S3/GCS URLs instead of static public files.
+- **Count vs. event drift** — `download_count` on the link is canonical. If a `DownloadEvent` insert fails after the atomic increment, the buyer still receives the file (logged error, redirect proceeds).
+- **Token in logs** — Request logs include the raw token in `/d/:token` paths. Production would scrub tokens in the log formatter.
+- **Token collision** — Retries up to 3 times on `RecordNotUnique` when generating token digests.
+
+## Production Considerations
+
+- **Large files** — Never proxy file bytes through Rails. Serve via presigned S3/GCS URLs or `X-Sendfile` against object storage.
+- **Email** — Configure SES/SMTP with retries and idempotent sends. Pair `deliver_later` with an outbox or dead-letter queue so failed deliveries are recoverable.
+- **Rate limiting** — Add `Rack::Attack` on `POST /api/v1/orders` (per-IP and per-email throttles).
+- **Host header / URL generation** — Download URLs are built from `action_mailer.default_url_options`, not `request.base_url`. Set the host in `config/environments/production.rb` before deploy (default generator placeholder: `example.com`). Kamal's `proxy.host` in `config/deploy.yml` is the deploy-side counterpart when using SSL.
+- **Log scrubbing** — Strip raw tokens from request log lines and error reports.
+- **Docker / dashboard build** — The Dockerfile runs `npm ci && npm run build` during the image build stage so the dashboard bundle is included in production images.
+- **CSP / Vite HMR** — Content-Security-Policy is not enabled. If added later, dev-only directives are needed for Vite HMR (`@vite/client`).
+- **DB `CHECK` on count** — The atomic conditional `UPDATE` is the real download-limit guard; the `download_count <= max_downloads` CHECK is belt-and-suspenders.
+
+See [PROMPTS.md](PROMPTS.md) for design rationale and trade-offs.
+
+## Deploy config
+
+Kamal/Docker files are Rails 8 defaults included for production notes. They are not configured for this take-home; see Production Considerations for what would change before a real deploy.
+
 ## Project Structure
 
 ```
@@ -190,6 +249,6 @@ app/
   models/        # Product, Order, DownloadLink, DownloadEvent
   jobs/          # Email delivery
   mailers/       # Buyer download link emails
-frontend/        # Svelte/TypeScript dashboard
+  frontend/      # Svelte/TypeScript dashboard (Vite)
 ```
 

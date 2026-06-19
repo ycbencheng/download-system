@@ -120,6 +120,36 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Minitest", event.user_agent
   end
 
+  test "POST /d/:token still redirects when DownloadEvent insert fails" do
+    link = download_links(:active)
+    original_save = DownloadEvent.instance_method(:save!)
+    DownloadEvent.define_method(:save!) do |*_args, **_kwargs, &_block|
+      raise StandardError, "audit insert failed"
+    end
+
+    assert_difference -> { link.reload.download_count }, 1 do
+      assert_no_difference -> { DownloadEvent.where(download_link: link).count } do
+        post download_confirm_url(token: "fixture-active-token")
+      end
+    end
+
+    assert_redirected_to "/downloads/sample.pdf"
+  ensure
+    DownloadEvent.define_method(:save!, original_save) if original_save
+  end
+
+  test "GET /d/:token returns 410 expired when link is both expired and maxed" do
+    link = download_links(:active)
+    link.update!(expires_at: 1.hour.ago, download_count: link.max_downloads)
+
+    get download_landing_url(token: "fixture-active-token"), headers: { "Accept" => "application/json" }
+
+    assert_response :gone
+    body = response.parsed_body
+    assert_equal "expired", body.dig("error", "code")
+    assert_not_equal "limit_reached", body.dig("error", "code")
+  end
+
   test "POST /d/:token returns 404 for unknown token" do
     post download_confirm_url(token: "bogus-token")
 

@@ -34,11 +34,33 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
 
       - name: Scan for security vulnerabilities in JavaScript dependencies
         run: npm audit --audit-level=high
+
+  build_js:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Build and type-check dashboard frontend
+        run: npm run build && npm run check
 
   lint:
     runs-on: ubuntu-latest

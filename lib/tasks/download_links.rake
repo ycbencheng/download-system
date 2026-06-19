@@ -1,9 +1,15 @@
 namespace :download_links do
-  desc "Revoke a download link by ID (sets revoked_at, preventing further downloads)"
-  task :revoke, [:id] => :environment do |_t, args|
-    abort "Usage: rails download_links:revoke[ID]" if args[:id].blank?
+  desc "Revoke a download link by numeric ID or raw token (sets revoked_at, preventing further downloads)"
+  task :revoke, [:id_or_token] => :environment do |_t, args|
+    id_or_token = args[:id_or_token].to_s
+    abort "Usage: rails download_links:revoke[ID_OR_TOKEN]" if id_or_token.blank?
 
-    link = DownloadLink.find(args[:id])
+    link = if id_or_token.match?(/\A\d+\z/)
+      DownloadLink.find(id_or_token)
+    else
+      digest = Digest::SHA256.hexdigest(id_or_token)
+      DownloadLink.find_by!(token_digest: digest)
+    end
 
     if link.revoked?
       puts "Link ##{link.id} is already revoked (at #{link.revoked_at.iso8601})."

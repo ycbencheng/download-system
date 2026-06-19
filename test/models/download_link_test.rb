@@ -60,6 +60,30 @@ class DownloadLinkTest < ActiveSupport::TestCase
     assert_raises(ActiveRecord::StatementInvalid) { link.save!(validate: false) }
   end
 
+  test "db rejects download_count above max_downloads when validations are bypassed" do
+    link = DownloadLink.new(valid_attributes.merge(download_count: 4, max_downloads: 3))
+    assert_raises(ActiveRecord::StatementInvalid) { link.save!(validate: false) }
+  end
+
+  test "status prefers expired over limit_reached" do
+    link = download_links(:maxed)
+    link.update_columns(expires_at: 1.hour.ago)
+
+    assert_equal :expired, link.status
+  end
+
+  test "status returns limit_reached when count equals max" do
+    assert_equal :limit_reached, download_links(:maxed).status
+  end
+
+  test "status returns active label for ok links" do
+    assert_equal "active", download_links(:active).status_label
+  end
+
+  test "status returns revoked for revoked links" do
+    assert_equal :revoked, download_links(:revoked).status
+  end
+
   test "revoked? is false until revoked" do
     assert_not download_links(:active).revoked?
   end
@@ -71,6 +95,21 @@ class DownloadLinkTest < ActiveSupport::TestCase
       assert link.revoked?
       assert_equal Time.current, link.revoked_at
     end
+  end
+
+  test "revoke! preserves original revoked_at on second call" do
+    link = download_links(:active)
+
+    freeze_time do
+      link.revoke!
+    end
+    first_revoked_at = link.revoked_at
+
+    travel 1.hour do
+      link.revoke!
+    end
+
+    assert_equal first_revoked_at, link.reload.revoked_at
   end
 
   test "cannot be destroyed while it has download events" do

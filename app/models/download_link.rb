@@ -13,10 +13,27 @@ class DownloadLink < ApplicationRecord
     revoked_at.present?
   end
 
+  def status
+    return :revoked if revoked?
+    return :expired if expires_at <= Time.current
+    return :limit_reached if download_count >= max_downloads
+
+    :ok
+  end
+
+  def status_label
+    case status
+    when :ok then "active"
+    else status.to_s
+    end
+  end
+
   # Refund/chargeback kill switch. Enforcement of revocation happens atomically
   # in the confirm UPDATE (revoked_at IS NULL in the WHERE clause); this just
   # stamps the row. Triggered from console/rake — the dashboard stays read-only.
   def revoke!
+    return if revoked?
+
     update!(revoked_at: Time.current)
   end
 end
