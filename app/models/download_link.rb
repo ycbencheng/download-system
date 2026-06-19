@@ -1,5 +1,5 @@
 class DownloadLink < ApplicationRecord
-  belongs_to :order
+  belongs_to :order, inverse_of: :download_link
   has_many :download_events, dependent: :restrict_with_exception
 
   validates :token_digest, presence: true, uniqueness: true

@@ -10,6 +10,12 @@ module ActiveSupport
     # Setup all fixtures in test/fixtures/*.yml for all tests in alphabetical order.
     fixtures :all
 
-    # Add more helper methods to be used by all tests here...
+    def with_env(vars)
+      previous = vars.keys.index_with { |key| ENV[key] }
+      vars.each { |key, value| ENV[key] = value }
+      yield
+    ensure
+      previous.each { |key, value| ENV[key] = value }
+    end
   end
 end

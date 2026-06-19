@@ -16,7 +16,7 @@ module Api
 
           ActiveRecord::Base.transaction do
             order.save!
-            order.download_links.create!(
+            order.create_download_link!(
               token_digest: token_digest,
               expires_at: order.created_at + product.expiry_hours.hours,
               max_downloads: product.max_downloads
@@ -24,6 +24,13 @@ module Api
           end
         # Digest collision is astronomically rare; retry with a fresh token (max 3) instead of failing the order.
         rescue ActiveRecord::RecordNotUnique
+          retries += 1
+          order = product.orders.new(buyer_email: order_params.require(:buyer_email))
+          retry if retries < 3
+          raise
+        rescue ActiveRecord::RecordInvalid => e
+          raise unless token_digest_collision?(e)
+
           retries += 1
           order = product.orders.new(buyer_email: order_params.require(:buyer_email))
           retry if retries < 3
@@ -38,7 +45,7 @@ module Api
         render json: {
           order_id: order.id,
           download_url: download_url,
-          expires_at: order.download_links.first.expires_at.iso8601,
+          expires_at: order.download_link.expires_at.iso8601,
           max_downloads: product.max_downloads
         }, status: :created
       end
@@ -55,6 +62,12 @@ module Api
       def download_url_for(token)
         opts = Rails.application.config.action_mailer.default_url_options
         download_landing_url(token, **opts)
+      end
+
+      def token_digest_collision?(error)
+        return false unless error.record.is_a?(DownloadLink)
+
+        error.record.errors.details[:token_digest].any? { |detail| detail[:error] == :taken }
       end
     end
   end

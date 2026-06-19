@@ -82,4 +82,70 @@ class Api::V1::DashboardControllerTest < ActionDispatch::IntegrationTest
     assert_response :ok
     assert_includes response.body, "Dashboard frontend not built"
   end
+
+  test "GET /api/v1/orders caps feed at 50 most recent" do
+    Order.update_all(created_at: 2.years.ago)
+
+    product = products(:ebook)
+    51.times do |i|
+      order = Order.create!(product: product, buyer_email: "cap-#{i}@example.com")
+      order.create_download_link!(
+        token_digest: Digest::SHA256.hexdigest("cap-feed-#{i}"),
+        expires_at: 1.day.from_now,
+        max_downloads: 3
+      )
+      order.update_column(:created_at, i.hours.ago)
+    end
+
+    get api_v1_orders_url, as: :json
+
+    assert_response :ok
+    body = response.parsed_body
+    assert_equal 50, body.size
+    emails = body.map { |o| o["buyer_email"] }
+    assert_includes emails, "cap-0@example.com"
+    assert_not_includes emails, "cap-50@example.com"
+  end
+
+  test "GET /api/v1/download_events caps feed at 100 most recent" do
+    DownloadEvent.update_all(created_at: 2.years.ago)
+
+    link = download_links(:active)
+    101.times do |i|
+      DownloadEvent.create!(
+        download_link: link,
+        ip: "10.0.0.#{i % 255}",
+        created_at: i.minutes.ago
+      )
+    end
+
+    get api_v1_download_events_url, as: :json
+
+    assert_response :ok
+    body = response.parsed_body
+    assert_equal 100, body.size
+
+    newest = body.max_by { |e| Time.iso8601(e["created_at"]) }
+    oldest_in_feed = body.min_by { |e| Time.iso8601(e["created_at"]) }
+    assert_in_delta Time.current, Time.iso8601(newest["created_at"]), 2.seconds
+    assert_operator Time.iso8601(oldest_in_feed["created_at"]), :>, 100.minutes.ago
+  end
+
+  test "dashboard feeds return unauthorized when DASHBOARD_TOKEN is set and missing" do
+    with_env("DASHBOARD_TOKEN" => "secret-token") do
+      get api_v1_products_url, as: :json
+      assert_response :unauthorized
+      assert_equal "unauthorized", response.parsed_body.dig("error", "code")
+    end
+  end
+
+  test "dashboard feeds accept bearer token when DASHBOARD_TOKEN is set" do
+    with_env("DASHBOARD_TOKEN" => "secret-token") do
+      get api_v1_products_url,
+        headers: { "Authorization" => "Bearer secret-token" },
+        as: :json
+
+      assert_response :ok
+    end
+  end
 end

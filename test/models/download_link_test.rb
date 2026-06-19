@@ -2,9 +2,10 @@ require "test_helper"
 
 class DownloadLinkTest < ActiveSupport::TestCase
   def valid_attributes
+    order = Order.create!(product: products(:ebook), buyer_email: "link-fixture-#{SecureRandom.hex(4)}@example.com")
     {
-      order: orders(:alice),
-      token_digest: "a_unique_digest",
+      order: order,
+      token_digest: "a_unique_digest_#{SecureRandom.hex(4)}",
       expires_at: 24.hours.from_now,
       max_downloads: 3
     }

@@ -4,8 +4,6 @@ class DownloadsController < ApplicationController
   # Token URLs use a layout with no JavaScript.
   layout "download"
 
-  PLACEHOLDER_FILE = "/downloads/sample.pdf"
-
   protect_from_forgery with: :exception
   # HTML form POSTs from button_to include the CSRF token; JSON POSTs skip verification.
   skip_before_action :verify_authenticity_token, only: :download, if: -> { request.format.json? }
@@ -97,13 +95,13 @@ class DownloadsController < ApplicationController
           ip: request.remote_ip,
           user_agent: request.user_agent
         )
-      rescue StandardError => e
+      rescue ActiveRecord::RecordInvalid, ActiveRecord::StatementInvalid => e
         Rails.logger.error(
           "DownloadEvent insert failed for link #{link.id}: #{e.class}: #{e.message}"
         )
       end
 
-      redirect_to PLACEHOLDER_FILE, allow_other_host: false
+      redirect_to DownloadDelivery.path_for(link.order.product), allow_other_host: false
     else
       link.reload
 

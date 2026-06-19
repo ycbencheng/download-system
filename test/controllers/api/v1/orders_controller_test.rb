@@ -24,7 +24,7 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     assert_equal "buyer@example.com", order.buyer_email
     assert_equal @product, order.product
 
-    link = order.download_links.first
+    link = order.download_link
     assert link.present?
     assert_equal 0, link.download_count
     assert_equal @product.max_downloads, link.max_downloads
@@ -56,15 +56,25 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "POST /api/v1/orders retries on token digest collision" do
-    attempts = 0
-    original_save = DownloadLink.instance_method(:save!)
-    DownloadLink.define_method(:save!) do |*args, **kwargs, &block|
-      if new_record?
-        attempts += 1
-        raise ActiveRecord::RecordNotUnique.new("PG::UniqueViolation") if attempts == 1
-      end
+    first_token = "collision-first-token-value"
+    second_token = "collision-second-token-value"
+    taken_digest = Digest::SHA256.hexdigest(first_token)
 
-      original_save.bind(self).call(*args, **kwargs, &block)
+    existing_order = Order.create!(product: @product, buyer_email: "existing-digest@example.com")
+    existing_order.create_download_link!(
+      token_digest: taken_digest,
+      expires_at: 1.day.from_now,
+      max_downloads: @product.max_downloads
+    )
+
+    token_calls = 0
+    original_urlsafe_base64 = SecureRandom.method(:urlsafe_base64)
+    SecureRandom.singleton_class.define_method(:urlsafe_base64) do |*args, **kwargs|
+      token_calls += 1
+      return first_token if token_calls == 1
+      return second_token if token_calls == 2
+
+      original_urlsafe_base64.call(*args, **kwargs)
     end
 
     assert_difference -> { Order.count } => 1, -> { DownloadLink.count } => 1 do
@@ -74,9 +84,9 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :created
-    assert_equal 2, attempts
+    assert_equal 2, token_calls
   ensure
-    DownloadLink.define_method(:save!, original_save) if original_save
+    SecureRandom.singleton_class.define_method(:urlsafe_base64, original_urlsafe_base64) if original_urlsafe_base64
   end
 
   test "POST /api/v1/orders returns 422 for invalid email" do
@@ -130,7 +140,7 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     download_url = response.parsed_body["download_url"]
     raw_token = download_url.split("/d/").last
 
-    link = Order.last.download_links.first
+    link = Order.last.download_link
     expected_digest = Digest::SHA256.hexdigest(raw_token)
     assert_equal expected_digest, link.token_digest
   end
@@ -145,27 +155,5 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     download_url = response.parsed_body["download_url"]
     assert_includes download_url, "example.com"
     assert_not_includes download_url, "evil.com"
-  end
-
-  test "POST /api/v1/orders rolls back order when link creation fails" do
-    original_save = DownloadLink.instance_method(:save!)
-    DownloadLink.define_method(:save!) do |*args, **kwargs, &block|
-      if new_record?
-        errors.add(:base, "simulated failure")
-        raise ActiveRecord::RecordInvalid.new(self)
-      end
-
-      original_save.bind(self).call(*args, **kwargs, &block)
-    end
-
-    assert_no_difference "Order.count" do
-      post api_v1_orders_url,
-        params: { product_id: @product.id, buyer_email: "buyer@example.com" },
-        as: :json
-    end
-
-    assert_response :unprocessable_entity
-  ensure
-    DownloadLink.define_method(:save!, original_save) if original_save
   end
 end

@@ -31,7 +31,7 @@ class OrderTest < ActiveSupport::TestCase
     end
   end
 
-  test "cannot be destroyed while it has download links" do
+  test "cannot be destroyed while it has a download link" do
     assert_raises(ActiveRecord::DeleteRestrictionError) { orders(:alice).destroy! }
   end
 end

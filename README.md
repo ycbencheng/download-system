@@ -240,7 +240,7 @@ Re-running revoke on an already-revoked link prints an "already revoked" message
 
 Before submission, these were run against a local `bin/dev` server with Postgres up:
 
-- `bin/rails test` — 98 runs, 0 failures (includes concurrency cap, host-header, and event-drift tests)
+- `bin/rails test` — full suite (includes concurrency cap, host-header, feed caps, and event-drift tests)
 - `GET /up` → 200
 - Seed error matrix: `/d/dev-expired-link-token` → 410, `/d/dev-maxed-link-token` → 403, `/d/dev-revoked-link-token` → 410, `/d/bogus` → 404
 - `POST /api/v1/orders` → 201 with `download_url`; missing product → 404; invalid email → 422
@@ -248,7 +248,7 @@ Before submission, these were run against a local `bin/dev` server with Postgres
 - `public/downloads/sample.pdf` present on disk
 - `download_links:revoke` idempotent message on already-revoked seed link
 
-Full step-by-step checklist is maintained in the manual QA plan used for submission review.
+See [docs/MANUAL_QA.md](docs/MANUAL_QA.md) for the step-by-step manual checklist.
 
 ## Known Limitations
 
@@ -270,6 +270,7 @@ Full step-by-step checklist is maintained in the manual QA plan used for submiss
 - **Large files** — Never proxy file bytes through Rails. Serve via presigned S3/GCS URLs or `X-Sendfile` against object storage.
 - **Email** — Configure SES/SMTP with retries and idempotent sends. Pair `deliver_later` with an outbox or dead-letter queue so failed deliveries are recoverable.
 - **Rate limiting** — Add `Rack::Attack` on `POST /api/v1/orders` (per-IP and per-email throttles).
+- **Dashboard API auth** — Set `DASHBOARD_TOKEN` in production; dashboard JSON feeds require `Authorization: Bearer <token>` when set (unset in dev/test by default).
 - **Host header / URL generation** — Download URLs are built from `action_mailer.default_url_options`, not `request.base_url`. Set the host in `config/environments/production.rb` before deploy (default generator placeholder: `example.com`). Kamal's `proxy.host` in `config/deploy.yml` is the deploy-side counterpart when using SSL.
 - **Log scrubbing** — Strip raw tokens from request log lines and error reports.
 - **Docker / dashboard build** — The Dockerfile runs `npm ci && npm run build` during the image build stage so the dashboard bundle is included in production images.

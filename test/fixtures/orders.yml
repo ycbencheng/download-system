@@ -1,3 +1,15 @@
 alice:
   product: ebook
   buyer_email: alice@example.com
+
+bob:
+  product: ebook
+  buyer_email: bob@example.com
+
+carol:
+  product: ebook
+  buyer_email: carol@example.com
+
+dave:
+  product: ebook
+  buyer_email: dave@example.com

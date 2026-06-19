@@ -1,6 +1,8 @@
 module Api
   module V1
     class DashboardController < BaseController
+      include DashboardAuthentication
+
       def products
         products = Product.order(created_at: :desc)
         render json: products.map { |p|
@@ -17,12 +19,12 @@ module Api
 
       def orders
         # Read-only dashboard feeds — capped for the take-home; production would paginate.
-        orders = Order.includes(:product, download_links: :download_events)
+        orders = Order.includes(:product, download_link: :download_events)
                       .order(created_at: :desc)
                       .limit(50)
 
         render json: orders.map { |o|
-          link = o.download_links.first
+          link = o.download_link
           {
             id: o.id,
             buyer_email: o.buyer_email,

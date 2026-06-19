@@ -33,10 +33,12 @@ class DownloadsConcurrencyTest < ActionDispatch::IntegrationTest
   end
 
   teardown do
-    DownloadEvent.where(download_link_id: @link.id).delete_all if @link
-    @link&.destroy
-    @order&.destroy
-    @product&.destroy
+    if @link
+      DownloadEvent.where(download_link_id: @link.id).delete_all
+      DownloadLink.where(id: @link.id).delete_all
+    end
+    @order&.delete
+    @product&.delete
   end
 
   test "parallel POST /d/:token yields exactly max_downloads successes under race" do

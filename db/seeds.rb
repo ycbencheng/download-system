@@ -24,6 +24,14 @@ def seed_token_digest(raw_token)
   Digest::SHA256.hexdigest(raw_token)
 end
 
+def seed_download_link!(order:, raw_token:, **attrs)
+  link = DownloadLink.find_or_initialize_by(order: order)
+  link.token_digest = seed_token_digest(raw_token)
+  attrs.each { |key, value| link.public_send("#{key}=", value) }
+  link.save!
+  link
+end
+
 ebook = Product.find_or_create_by!(name: "Sample Ebook") do |product|
   product.file_name = "ebook.pdf"
   product.expiry_hours = 24
@@ -43,40 +51,44 @@ bob_order     = Order.find_or_create_by!(product: course, buyer_email: "bob@exam
 carol_order   = Order.find_or_create_by!(product: ebook,  buyer_email: "carol@example.com")
 dave_order    = Order.find_or_create_by!(product: course, buyer_email: "dave@example.com")
 
-active_link = DownloadLink.find_or_create_by!(token_digest: seed_token_digest("dev-active-link-token")) do |link|
-  link.order = alice_order
-  link.expires_at = 24.hours.from_now
-  link.max_downloads = ebook.max_downloads
-  link.download_count = 0
-end
+active_link = seed_download_link!(
+  order: alice_order,
+  raw_token: "dev-active-link-token",
+  expires_at: 24.hours.from_now,
+  max_downloads: ebook.max_downloads,
+  download_count: 0
+)
 
 # Pre-expired link: expires_at in the past. Snapshot max_downloads from the
 # product at creation time (mirrors what the order API does).
-DownloadLink.find_or_create_by!(token_digest: seed_token_digest("dev-expired-link-token")) do |link|
-  link.order = bob_order
-  link.expires_at = 1.hour.ago
-  link.max_downloads = course.max_downloads
-  link.download_count = 0
-end
+seed_download_link!(
+  order: bob_order,
+  raw_token: "dev-expired-link-token",
+  expires_at: 1.hour.ago,
+  max_downloads: course.max_downloads,
+  download_count: 0
+)
 
 # Pre-maxed link: download_count == max_downloads, still within the expiry
 # window so the failure is unambiguously "limit reached", not "expired".
-DownloadLink.find_or_create_by!(token_digest: seed_token_digest("dev-maxed-link-token")) do |link|
-  link.order = carol_order
-  link.expires_at = 24.hours.from_now
-  link.max_downloads = ebook.max_downloads
-  link.download_count = ebook.max_downloads
-end
+seed_download_link!(
+  order: carol_order,
+  raw_token: "dev-maxed-link-token",
+  expires_at: 24.hours.from_now,
+  max_downloads: ebook.max_downloads,
+  download_count: ebook.max_downloads
+)
 
 # Revoked link: valid window + count, but revoked_at is stamped. Proves the
 # revocation kill switch wins over an otherwise-usable link.
-DownloadLink.find_or_create_by!(token_digest: seed_token_digest("dev-revoked-link-token")) do |link|
-  link.order = dave_order
-  link.expires_at = 24.hours.from_now
-  link.max_downloads = course.max_downloads
-  link.download_count = 0
-  link.revoked_at = 1.hour.ago
-end
+seed_download_link!(
+  order: dave_order,
+  raw_token: "dev-revoked-link-token",
+  expires_at: 24.hours.from_now,
+  max_downloads: course.max_downloads,
+  download_count: 0,
+  revoked_at: 1.hour.ago
+)
 
 # One historical DownloadEvent on the active link so the dashboard feed has
 # something non-empty to render on first boot.

@@ -124,7 +124,7 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
     link = download_links(:active)
     original_save = DownloadEvent.instance_method(:save!)
     DownloadEvent.define_method(:save!) do |*_args, **_kwargs, &_block|
-      raise StandardError, "audit insert failed"
+      raise ActiveRecord::StatementInvalid.new("PG::Error: audit insert failed")
     end
 
     assert_difference -> { link.reload.download_count }, 1 do
