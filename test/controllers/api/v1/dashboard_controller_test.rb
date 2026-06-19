@@ -149,4 +149,19 @@ class Api::V1::DashboardControllerTest < ActionDispatch::IntegrationTest
       assert_response :ok
     end
   end
+
+  test "dashboard feeds fail closed in a deployed env when DASHBOARD_TOKEN is unset" do
+    # In dev/test (Rails.env.local?) the feeds stay open; any deployed env must
+    # require the token because the feeds carry buyer PII. "staging" (non-local,
+    # non-production) pins that the gate is local?, not just production?.
+    original_env = Rails.env
+    Rails.env = ActiveSupport::StringInquirer.new("staging")
+    begin
+      get api_v1_products_url, as: :json
+      assert_response :unauthorized
+      assert_equal "unauthorized", response.parsed_body.dig("error", "code")
+    ensure
+      Rails.env = original_env
+    end
+  end
 end
