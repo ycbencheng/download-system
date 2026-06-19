@@ -17,7 +17,7 @@ class DownloadsConcurrencyTest < ActionDispatch::IntegrationTest
 
     @product = Product.create!(
       name: "Concurrency Ebook",
-      file_name: "concurrency.pdf",
+      file_name: "sample.pdf",
       expiry_hours: 24,
       max_downloads: MAX_DOWNLOADS
     )
@@ -61,16 +61,21 @@ class DownloadsConcurrencyTest < ActionDispatch::IntegrationTest
     barrier.wait
     threads.each(&:join)
 
-    successes = results.count(302)
+    successes = results.count(200)
     rejections = results.count(403)
 
     assert_equal THREAD_COUNT, results.size, "every thread should report a status"
     assert_equal MAX_DOWNLOADS, successes,
-      "expected exactly #{MAX_DOWNLOADS} redirects, got #{successes} (#{results.tally.inspect})"
+      "expected exactly #{MAX_DOWNLOADS} file streams, got #{successes} (#{results.tally.inspect})"
     assert_equal THREAD_COUNT - MAX_DOWNLOADS, rejections,
       "expected #{THREAD_COUNT - MAX_DOWNLOADS} limit rejections, got #{rejections}"
     assert_equal MAX_DOWNLOADS, @link.reload.download_count
-    assert_equal MAX_DOWNLOADS, DownloadEvent.where(download_link: @link).count
+    # Every attempt against this existing link is audited: successes plus the
+    # limit_reached rejections.
+    assert_equal MAX_DOWNLOADS, DownloadEvent.where(download_link: @link, outcome: "success").count
+    assert_equal THREAD_COUNT - MAX_DOWNLOADS,
+      DownloadEvent.where(download_link: @link, outcome: "limit_reached").count
+    assert_equal THREAD_COUNT, DownloadEvent.where(download_link: @link).count
   end
 
   private

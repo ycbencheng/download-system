@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fetchDownloadEvents, type DownloadEvent } from "./api";
+  import StatusBadge from "./StatusBadge.svelte";
 
   let events: DownloadEvent[] = $state([]);
   let loading = $state(true);
@@ -35,6 +36,7 @@
         <th>Time</th>
         <th>Product</th>
         <th>Buyer</th>
+        <th>Outcome</th>
         <th>IP</th>
         <th>User Agent</th>
       </tr>
@@ -45,6 +47,7 @@
           <td class="date">{new Date(ev.created_at).toLocaleString()}</td>
           <td class="primary">{ev.product_name}</td>
           <td>{ev.buyer_email}</td>
+          <td><StatusBadge status={ev.outcome} /></td>
           <td><code>{ev.ip ?? "—"}</code></td>
           <td class="ua" title={ev.user_agent ?? ""}>{truncateUA(ev.user_agent)}</td>
         </tr>

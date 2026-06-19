@@ -5,36 +5,21 @@ module Api
         product = Product.find(order_params.require(:product_id))
         order = product.orders.new(buyer_email: order_params.require(:buyer_email))
 
-        raw_token = nil
-        token_digest = nil
-        retries = 0
+        raw_token = SecureRandom.urlsafe_base64(32)
+        # Store SHA256(token), not the raw value. Lookup is by digest on a unique index.
+        token_digest = Digest::SHA256.hexdigest(raw_token)
 
-        begin
-          raw_token = SecureRandom.urlsafe_base64(32)
-          # Store SHA256(token), not the raw value. Lookup is by digest on a unique index.
-          token_digest = Digest::SHA256.hexdigest(raw_token)
-
-          ActiveRecord::Base.transaction do
-            order.save!
-            order.create_download_link!(
-              token_digest: token_digest,
-              expires_at: order.created_at + product.expiry_hours.hours,
-              max_downloads: product.max_downloads
-            )
-          end
-        # Digest collision is astronomically rare; retry with a fresh token (max 3) instead of failing the order.
-        rescue ActiveRecord::RecordNotUnique
-          retries += 1
-          order = product.orders.new(buyer_email: order_params.require(:buyer_email))
-          retry if retries < 3
-          raise
-        rescue ActiveRecord::RecordInvalid => e
-          raise unless token_digest_collision?(e)
-
-          retries += 1
-          order = product.orders.new(buyer_email: order_params.require(:buyer_email))
-          retry if retries < 3
-          raise
+        # No collision retry: a 256-bit random token makes a digest collision
+        # unreachable (~2^-128). The unique index is correctness insurance, not a
+        # hot path — if the impossible happens it surfaces as a 500 rather than
+        # masking a real bug behind a retry loop.
+        ActiveRecord::Base.transaction do
+          order.save!
+          order.create_download_link!(
+            token_digest: token_digest,
+            expires_at: order.created_at + product.expiry_hours.hours,
+            max_downloads: product.max_downloads
+          )
         end
 
         download_url = download_url_for(raw_token)
@@ -63,12 +48,6 @@ module Api
       def download_url_for(token)
         opts = Rails.application.config.action_mailer.default_url_options
         download_landing_url(token, **opts)
-      end
-
-      def token_digest_collision?(error)
-        return false unless error.record.is_a?(DownloadLink)
-
-        error.record.errors.details[:token_digest].any? { |detail| detail[:error] == :taken }
       end
     end
   end

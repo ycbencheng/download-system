@@ -15,8 +15,9 @@
 #   maxed    -> http://localhost:3000/d/dev-maxed-link-token    (403 limit reached)
 #   revoked  -> http://localhost:3000/d/dev-revoked-link-token  (410 revoked)
 #
-# Clicking the Download button on the normal link redirects to the real
-# placeholder at public/downloads/sample.pdf.
+# Clicking the Download button on the normal link streams the stub file from
+# storage/product_files/sample.pdf through the token-gated controller (the bytes
+# are NOT in public/). Every demo product points at that one stub.
 
 require "digest"
 
@@ -33,13 +34,13 @@ def seed_download_link!(order:, raw_token:, **attrs)
 end
 
 ebook = Product.find_or_create_by!(name: "Sample Ebook") do |product|
-  product.file_name = "ebook.pdf"
+  product.file_name = "sample.pdf"
   product.expiry_hours = 24
   product.max_downloads = 3
 end
 
 course = Product.find_or_create_by!(name: "Intro Course") do |product|
-  product.file_name = "course.zip"
+  product.file_name = "sample.pdf"
   product.expiry_hours = 72
   product.max_downloads = 5
 end

@@ -104,7 +104,7 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "This link has reached its download limit", body.dig("error", "message")
   end
 
-  test "POST /d/:token increments count, logs DownloadEvent, and redirects to placeholder" do
+  test "POST /d/:token increments count, logs DownloadEvent, and streams the file" do
     link = download_links(:active)
 
     assert_difference -> { link.reload.download_count }, 1 do
@@ -113,14 +113,69 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
       end
     end
 
-    assert_redirected_to "/downloads/sample.pdf"
+    assert_response :success
+    assert_match(/attachment/, response.headers["Content-Disposition"])
 
     event = DownloadEvent.where(download_link: link).order(:created_at).last
     assert_equal "127.0.0.1", event.ip
     assert_equal "Minitest", event.user_agent
   end
 
-  test "POST /d/:token still redirects when DownloadEvent insert fails" do
+  test "POST /d/:token logs a limit_reached outcome against an existing maxed link" do
+    link = download_links(:maxed)
+
+    assert_difference -> { DownloadEvent.where(download_link: link).count }, 1 do
+      post download_confirm_url(token: "fixture-maxed-token")
+    end
+
+    assert_response :forbidden
+    assert_equal "limit_reached", DownloadEvent.where(download_link: link).order(:created_at).last.outcome
+  end
+
+  test "POST /d/:token logs an expired outcome against an existing expired link" do
+    link = download_links(:expired)
+
+    assert_difference -> { DownloadEvent.where(download_link: link).count }, 1 do
+      post download_confirm_url(token: "fixture-expired-token")
+    end
+
+    assert_response :gone
+    assert_equal "expired", DownloadEvent.where(download_link: link).order(:created_at).last.outcome
+  end
+
+  test "POST /d/:token logs a revoked outcome against an existing revoked link" do
+    link = download_links(:revoked)
+
+    assert_difference -> { DownloadEvent.where(download_link: link).count }, 1 do
+      post download_confirm_url(token: "fixture-revoked-token")
+    end
+
+    assert_response :gone
+    assert_equal "revoked", DownloadEvent.where(download_link: link).order(:created_at).last.outcome
+  end
+
+  test "POST /d/:token writes no audit row for an unknown token" do
+    assert_no_difference -> { DownloadEvent.count } do
+      post download_confirm_url(token: "bogus-token")
+    end
+
+    assert_response :not_found
+  end
+
+  test "POST /d/:token returns 500 without consuming a download when the file is missing" do
+    link = download_links(:active)
+    link.order.product.update!(file_name: "not-on-disk.pdf")
+
+    assert_no_difference -> { link.reload.download_count } do
+      assert_no_difference -> { DownloadEvent.where(download_link: link).count } do
+        post download_confirm_url(token: "fixture-active-token")
+      end
+    end
+
+    assert_response :internal_server_error
+  end
+
+  test "POST /d/:token still streams the file when DownloadEvent insert fails" do
     link = download_links(:active)
     original_save = DownloadEvent.instance_method(:save!)
     DownloadEvent.define_method(:save!) do |*_args, **_kwargs, &_block|
@@ -133,7 +188,8 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
       end
     end
 
-    assert_redirected_to "/downloads/sample.pdf"
+    assert_response :success
+    assert_match(/attachment/, response.headers["Content-Disposition"])
   ensure
     DownloadEvent.define_method(:save!, original_save) if original_save
   end
@@ -217,7 +273,7 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
 
     max.times do
       post download_confirm_url(token: token)
-      assert_redirected_to "/downloads/sample.pdf", "download #{link.reload.download_count} should succeed"
+      assert_response :success, "download #{link.reload.download_count} should succeed"
     end
 
     assert_equal max, link.reload.download_count
@@ -245,7 +301,7 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
 
     travel_to Time.at(expiry.to_f - 0.000001) do
       post download_confirm_url(token: "fixture-active-token")
-      assert_redirected_to "/downloads/sample.pdf"
+      assert_response :success
       assert_equal 1, link.reload.download_count
     end
   end
@@ -269,7 +325,7 @@ class DownloadsControllerTest < ActionDispatch::IntegrationTest
     link = download_links(:active)
 
     post download_confirm_url(token: "fixture-active-token")
-    assert_redirected_to "/downloads/sample.pdf", "precondition: download succeeds before revocation"
+    assert_response :success, "precondition: download succeeds before revocation"
 
     link.revoke!
 

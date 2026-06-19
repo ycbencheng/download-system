@@ -47,8 +47,12 @@ class SeedsTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "revoked"
   end
 
-  test "public placeholder file exists for the POST confirm redirect target" do
-    placeholder = Rails.public_path.join("downloads/sample.pdf")
-    assert placeholder.file?, "expected #{placeholder} to exist for the 302 download target"
+  test "stub file exists under storage/product_files for the gated POST stream" do
+    stub = DownloadDelivery::ROOT.join("sample.pdf")
+    assert stub.file?, "expected #{stub} to exist as the streamed download target"
+
+    # The bytes must NOT be reachable from public/ — gating is the whole point.
+    assert_not Rails.public_path.join("downloads", "sample.pdf").exist?,
+      "sample.pdf must not live under public/ (it would bypass token gating)"
   end
 end

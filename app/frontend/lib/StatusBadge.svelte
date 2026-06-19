@@ -1,11 +1,12 @@
 <script lang="ts">
   interface Props {
-    status: "active" | "expired" | "limit_reached" | "revoked";
+    status: "active" | "success" | "expired" | "limit_reached" | "revoked";
   }
   let { status }: Props = $props();
 
   const labels: Record<string, string> = {
     active: "Active",
+    success: "Success",
     expired: "Expired",
     limit_reached: "Limit",
     revoked: "Revoked",
@@ -25,7 +26,8 @@
     letter-spacing: 0.03em;
   }
 
-  .active {
+  .active,
+  .success {
     background: #d1fae5;
     color: #065f46;
   }

@@ -55,40 +55,6 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     assert_equal "nested@example.com", Order.find(response.parsed_body["order_id"]).buyer_email
   end
 
-  test "POST /api/v1/orders retries on token digest collision" do
-    first_token = "collision-first-token-value"
-    second_token = "collision-second-token-value"
-    taken_digest = Digest::SHA256.hexdigest(first_token)
-
-    existing_order = Order.create!(product: @product, buyer_email: "existing-digest@example.com")
-    existing_order.create_download_link!(
-      token_digest: taken_digest,
-      expires_at: 1.day.from_now,
-      max_downloads: @product.max_downloads
-    )
-
-    token_calls = 0
-    original_urlsafe_base64 = SecureRandom.method(:urlsafe_base64)
-    SecureRandom.singleton_class.define_method(:urlsafe_base64) do |*args, **kwargs|
-      token_calls += 1
-      return first_token if token_calls == 1
-      return second_token if token_calls == 2
-
-      original_urlsafe_base64.call(*args, **kwargs)
-    end
-
-    assert_difference -> { Order.count } => 1, -> { DownloadLink.count } => 1 do
-      post api_v1_orders_url,
-        params: { product_id: @product.id, buyer_email: "collision@example.com" },
-        as: :json
-    end
-
-    assert_response :created
-    assert_equal 2, token_calls
-  ensure
-    SecureRandom.singleton_class.define_method(:urlsafe_base64, original_urlsafe_base64) if original_urlsafe_base64
-  end
-
   test "POST /api/v1/orders returns 422 for invalid email" do
     assert_no_enqueued_emails do
       assert_no_difference "Order.count" do
@@ -128,7 +94,7 @@ class Api::V1::OrdersControllerTest < ActionDispatch::IntegrationTest
     perform_enqueued_jobs
 
     mail = ActionMailer::Base.deliveries.last
-    assert_equal ["buyer@example.com"], mail.to
+    assert_equal [ "buyer@example.com" ], mail.to
     assert_includes mail.html_part.decoded, download_url
     assert_includes mail.text_part.decoded, download_url
   end

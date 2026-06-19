@@ -53,6 +53,7 @@ module Api
             id: e.id,
             ip: e.ip,
             user_agent: e.user_agent,
+            outcome: e.outcome,
             created_at: e.created_at.iso8601,
             download_link_id: link.id,
             buyer_email: link.order.buyer_email,

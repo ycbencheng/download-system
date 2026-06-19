@@ -1,21 +1,30 @@
 require "test_helper"
 
 class DownloadDeliveryTest < ActiveSupport::TestCase
-  test "returns public path when product file exists under public/downloads" do
-    product = products(:ebook)
-    public_path = Rails.public_path.join("downloads", product.file_name)
+  test "returns the absolute path under storage/product_files when the file exists" do
+    product = products(:ebook) # file_name: sample.pdf, present on disk
 
-    FileUtils.mkdir_p(public_path.dirname)
-    FileUtils.cp(Rails.public_path.join("downloads", "sample.pdf"), public_path)
+    path = DownloadDelivery.path_for(product)
 
-    assert_equal "/downloads/#{product.file_name}", DownloadDelivery.path_for(product)
-  ensure
-    public_path.delete if public_path&.exist?
+    assert_equal DownloadDelivery::ROOT.join("sample.pdf"), path
+    assert path.file?, "resolved path should point at a real file"
   end
 
-  test "falls back to sample.pdf when product file is absent" do
+  test "returns nil when the product file is absent (no silent fallback)" do
     product = Product.new(file_name: "missing-on-disk.zip")
 
-    assert_equal DownloadDelivery::FALLBACK_PATH, DownloadDelivery.path_for(product)
+    assert_nil DownloadDelivery.path_for(product)
+  end
+
+  test "returns nil when the product has no file_name" do
+    assert_nil DownloadDelivery.path_for(Product.new(file_name: nil))
+    assert_nil DownloadDelivery.path_for(Product.new(file_name: ""))
+  end
+
+  test "strips path traversal from file_name" do
+    product = Product.new(file_name: "../../config/database.yml")
+
+    # File.basename collapses to database.yml, which is not under ROOT, so nil.
+    assert_nil DownloadDelivery.path_for(product)
   end
 end

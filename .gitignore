@@ -24,6 +24,11 @@
 # Ignore storage (uploaded files in development and any SQLite databases).
 /storage/*
 !/storage/.keep
+# Keep the take-home product file stub: download bytes live here (NOT public/),
+# so the only path to them is through the token-gated DownloadsController.
+!/storage/product_files
+/storage/product_files/*
+!/storage/product_files/sample.pdf
 /tmp/storage/*
 !/tmp/storage/
 !/tmp/storage/.keep

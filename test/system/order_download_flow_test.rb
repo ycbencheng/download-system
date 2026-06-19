@@ -1,7 +1,7 @@
 require "application_system_test_case"
 
 class OrderDownloadFlowTest < ApplicationSystemTestCase
-  test "buyer can order via API, visit landing page, and download" do
+  test "buyer can order via API, visit landing page, and confirm the download" do
     product = products(:ebook)
 
     api = ActionDispatch::Integration::Session.new(Rails.application)
@@ -13,14 +13,20 @@ class OrderDownloadFlowTest < ApplicationSystemTestCase
 
     assert_equal 201, api.response.status, api.response.body
 
-    download_url = JSON.parse(api.response.body)["download_url"]
-    visit download_url
+    body = JSON.parse(api.response.body)
+    link = Order.find(body["order_id"]).download_link
+
+    visit body["download_url"]
 
     assert_text "Your download is ready"
     assert_text product.name
 
-    click_button "Download"
-
-    assert_current_path "/downloads/sample.pdf"
+    # The file streams via send_file (not a navigable redirect), so we assert the
+    # click reached the confirm action by its effect: one consumed download.
+    # Byte-level delivery (200 + Content-Disposition) is covered in the
+    # DownloadsController integration test.
+    assert_difference -> { link.reload.download_count }, 1 do
+      click_button "Download"
+    end
   end
 end

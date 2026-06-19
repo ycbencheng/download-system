@@ -37,7 +37,7 @@ class Api::V1::DashboardControllerTest < ActionDispatch::IntegrationTest
     get api_v1_orders_url, as: :json
     body = response.parsed_body
 
-    statuses = body.flat_map { |o| o["download_link"] ? [o["download_link"]["status"]] : [] }
+    statuses = body.flat_map { |o| o["download_link"] ? [ o["download_link"]["status"] ] : [] }
     assert statuses.include?("active"), "expected at least one active link"
   end
 
@@ -50,7 +50,7 @@ class Api::V1::DashboardControllerTest < ActionDispatch::IntegrationTest
 
     event = body.first
     if event
-      %w[id ip user_agent created_at download_link_id buyer_email product_name].each do |key|
+      %w[id ip user_agent outcome created_at download_link_id buyer_email product_name].each do |key|
         assert event.key?(key), "expected event to include #{key}"
       end
     end
@@ -64,6 +64,7 @@ class Api::V1::DashboardControllerTest < ActionDispatch::IntegrationTest
     event = body.find { |e| e["id"] == event_fixture.id }
     assert event, "expected the fixture event in the response"
     assert_equal event_fixture.ip, event["ip"]
+    assert_equal "success", event["outcome"]
     assert_equal products(:ebook).name, event["product_name"]
     assert_equal orders(:alice).buyer_email, event["buyer_email"]
   end

@@ -26,10 +26,13 @@ export interface Order {
   download_link: DownloadLinkSummary | null;
 }
 
+export type DownloadOutcome = "success" | "expired" | "limit_reached" | "revoked";
+
 export interface DownloadEvent {
   id: number;
   ip: string | null;
   user_agent: string | null;
+  outcome: DownloadOutcome;
   created_at: string;
   download_link_id: number;
   buyer_email: string;

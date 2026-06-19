@@ -76,34 +76,40 @@ class DownloadsController < ApplicationController
       )
     end
 
-    # Single atomic conditional UPDATE — one round trip, safe under concurrent POSTs.
-    # update_all (not increment!) keeps limit, expiry, and revocation checks in one SQL
-    # statement; a separate read-then-increment can race under concurrent POSTs.
+    # Resolve and verify the file BEFORE consuming a download: never burn one of
+    # the buyer's downloads for a file we cannot deliver.
+    file_path = ::DownloadDelivery.path_for(link.order.product)
+    unless file_path
+      Rails.logger.error(
+        "Download file unavailable for link #{link.id} (product #{link.order.product_id})"
+      )
+      return render_download_error(
+        status: :internal_server_error,
+        code: "file_unavailable",
+        message: "The file for this download is temporarily unavailable",
+        template: :unavailable
+      )
+    end
+
+    # Atomic conditional UPDATE: limit, expiry, and revocation enforced in one
+    # statement so the cap holds under concurrent POSTs (read-then-increment races).
     updated = DownloadLink
       .where(id: link.id)
       .where("download_count < max_downloads AND expires_at > ? AND revoked_at IS NULL", Time.current)
       .update_all("download_count = download_count + 1")
 
     if updated == 1
-      # update_all bypasses Active Record — reload before using the link again.
-      link.reload
-
-      # DownloadEvent is audit-only; download_count on the link is canonical.
-      # Buyer still gets the file if audit insert fails — intentional tradeoff.
-      begin
-        link.download_events.create!(
-          ip: request.remote_ip,
-          user_agent: request.user_agent
-        )
-      rescue ActiveRecord::RecordInvalid, ActiveRecord::StatementInvalid => e
-        Rails.logger.error(
-          "DownloadEvent insert failed for link #{link.id}: #{e.class}: #{e.message}"
-        )
-      end
-
-      redirect_to ::DownloadDelivery.path_for(link.order.product), allow_other_host: false
+      link.reload # update_all bypasses Active Record.
+      log_download_event(link, "success")
+      # Token-gated stream: the controller is the only path to these bytes.
+      send_file file_path, disposition: "attachment"
     else
       link.reload
+      # Audit the failed attempt against this known link. We only log attempts on
+      # links that exist (never unknown tokens), so this cannot become an
+      # unbounded write vector — production still needs Rack::Attack to bound the
+      # volume of attempts against a single valid link.
+      log_download_event(link, link.status.to_s)
 
       case link.status
       when :revoked
@@ -132,6 +138,20 @@ class DownloadsController < ApplicationController
   end
 
   private
+
+  # DownloadEvent is best-effort audit; download_count on the link is canonical,
+  # so the buyer still gets the file if the audit insert fails.
+  def log_download_event(link, outcome)
+    link.download_events.create!(
+      ip: request.remote_ip,
+      user_agent: request.user_agent,
+      outcome: outcome
+    )
+  rescue ActiveRecord::RecordInvalid, ActiveRecord::StatementInvalid => e
+    Rails.logger.error(
+      "DownloadEvent insert failed for link #{link.id}: #{e.class}: #{e.message}"
+    )
+  end
 
   def render_download_error(status:, code:, message:, template:)
     respond_to do |format|

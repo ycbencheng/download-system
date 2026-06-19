@@ -1,6 +1,6 @@
 namespace :download_links do
   desc "Revoke a download link by numeric ID or raw token (sets revoked_at, preventing further downloads)"
-  task :revoke, [:id_or_token] => :environment do |_t, args|
+  task :revoke, [ :id_or_token ] => :environment do |_t, args|
     id_or_token = args[:id_or_token].to_s
     abort "Usage: rails download_links:revoke[ID_OR_TOKEN]" if id_or_token.blank?
 

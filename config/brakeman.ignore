@@ -1,0 +1,28 @@
+{
+  "ignored_warnings": [
+    {
+      "warning_type": "File Access",
+      "warning_code": 16,
+      "fingerprint": "11f56bad84b72847c0825eebb26b5b393f4f7fa786e38f8f4a6d77387b5431e3",
+      "check_name": "SendFile",
+      "message": "Parameter value used in file name",
+      "file": "app/controllers/downloads_controller.rb",
+      "line": 105,
+      "link": "https://brakemanscanner.org/docs/warning_types/file_access/",
+      "code": "send_file(::DownloadDelivery.path_for(find_link_by_token(params[:token]).order.product), :disposition => \"attachment\")",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "DownloadsController",
+        "method": "download"
+      },
+      "user_input": "params[:token]",
+      "confidence": "Weak",
+      "cwe_id": [
+        22
+      ],
+      "note": "Path is not attacker-controlled: the token only selects a DownloadLink, and DownloadDelivery.path_for resolves File.basename(product.file_name) under a fixed ROOT, returning nil unless the file exists and is readable. No path component comes from the request, so traversal is not possible."
+    }
+  ],
+  "brakeman_version": "8.0.5"
+}
