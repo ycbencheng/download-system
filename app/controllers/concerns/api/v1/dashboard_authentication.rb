@@ -10,13 +10,14 @@ module Api
       private
 
       # The dashboard feeds expose buyer PII (emails, IPs, user agents), so they
-      # fail closed in production: no DASHBOARD_TOKEN means no access. In dev/test
-      # the token is optional so local review stays frictionless.
+      # fail closed in every deployed environment: no DASHBOARD_TOKEN means no
+      # access. Only dev/test (Rails.env.local?) stay open so local review is
+      # frictionless — staging and production both require the token.
       def authenticate_dashboard!
         expected = ENV["DASHBOARD_TOKEN"]
 
         if expected.blank?
-          return unless Rails.env.production?
+          return if Rails.env.local?
 
           return render json: {
             error: { code: "unauthorized", message: "Dashboard access is not configured" }
