@@ -1,4 +1,5 @@
 {
+  "name": "download-system",
   "private": true,
   "type": "module",
   "scripts": {

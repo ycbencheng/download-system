@@ -1,6 +1,6 @@
 # Download System
 
-Rails app that issues time-limited download links when a buyer purchases a digital product.
+A demo of structuring a download feature, handling errors, and system design. The app issues time-limited download links when a buyer purchases a digital product.
 
 ## What the app does
 
@@ -21,7 +21,7 @@ Open [http://localhost:3000](http://localhost:3000). Health check: [http://local
 
 Or use `bin/setup` (add `--reset` to drop and reseed; `--skip-server` to stop before starting the server).
 
-## Assignment coverage
+## What this demo covers
 
 | Area | What works |
 | ---- | ---------- |
@@ -182,7 +182,7 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 
 ## Known limitations and production notes
 
-**Gaps in this take-home**
+**Known gaps**
 
 - Bearer-token model — link sharing is possible; two-step flow only stops prefetchers.
 - Token in the URL is documented, not mitigated — the raw token lands in access logs, browser history, and the `Referer` header. Gating blocks *unauthorized bytes*; it does not stop a leaked token from being replayed until expiry/cap/revoke.
@@ -203,11 +203,11 @@ Re-running revoke on an already-revoked link prints "already revoked" without ch
 - `Idempotency-Key` deduplication on orders (sketch only; not implemented). Per-IP `Rack::Attack` throttling **is** in place (`config/initializers/rack_attack.rb`) on order creation and the download confirm endpoint; production would tune the limits.
 - Dashboard feeds expose buyer PII and **fail closed in every deployed environment** (staging and production): set `DASHBOARD_TOKEN` or the feeds return 401. The token is optional only in dev/test (`Rails.env.local?`).
 - Log scrubbing for raw tokens in `/d/:token` request paths.
-- Kamal/Docker files are Rails 8 defaults — not configured for this submission.
+- Kamal/Docker files are Rails 8 defaults — not configured for this demo.
 
 **Deliberately deferred (decisions, not oversights)**
 
-- **Merchant product-create UI.** Products are created via `POST /api/v1/products`, seeds, or console. The brief's dashboard requirement is read-only and "can be minimal," so a write UI is out of scope.
+- **Merchant product-create UI.** Products are created via `POST /api/v1/products`, seeds, or console. The dashboard is read-only, so a write UI is out of scope.
 - **Frontend unit-test infra.** Svelte 5 (`$state` runes) + vitest + testing-library + jsdom is real setup cost on a minimal read-only dashboard. The controller test already asserts the dashboard root renders; the one unit test worth adding would assert `Activity.svelte` renders a `limit_reached` outcome badge.
 - **Idempotency.** Sketch only: an `Idempotency-Key` header backed by a unique index returns the existing order on retry. Not implemented (per-IP rate limiting via `Rack::Attack` is).
 
